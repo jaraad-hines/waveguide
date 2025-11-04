@@ -1,0 +1,328 @@
+"use client"
+
+import { useRef, useMemo, useState } from "react"
+import { useFrame, useThree } from "@react-three/fiber"
+import * as THREE from "three"
+
+const vertexShader = `
+  varying vec2 vUv;
+  varying vec3 vPosition;
+  varying vec3 vNormal;
+  uniform float uTime;
+  
+  void main() {
+    vUv = uv;
+    vPosition = position;
+    vNormal = normalize(normalMatrix * normal);
+    
+    // Subtle wave motion
+    vec3 pos = position;
+    pos.x += sin(position.y * 2.0 + uTime * 0.5) * 0.05;
+    pos.z += cos(position.y * 1.5 + uTime * 0.3) * 0.03;
+    
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+  }
+`
+
+const fragmentShader = `
+  varying vec2 vUv;
+  varying vec3 vPosition;
+  varying vec3 vNormal;
+  uniform float uTime;
+  uniform float uIndex;
+  uniform vec3 uColor1;
+  uniform vec3 uColor2;
+  uniform vec3 uColor3;
+  uniform vec3 uColor4;
+  
+  void main() {
+    // Vertical gradient along the beam length
+    float gradientMix = vUv.y;
+    vec3 color = mix(uColor4, uColor1, gradientMix);
+    
+    // Add some variation per beam
+    float variation = sin(uIndex * 0.5 + uTime * 0.2) * 0.5 + 0.5;
+    color = mix(color, uColor2, variation * 0.3);
+    
+    vec3 viewDirection = normalize(cameraPosition - vPosition);
+    float rimLight = 1.0 - abs(dot(viewDirection, vNormal));
+    rimLight = pow(rimLight, 2.0); // Increased power for softer rim (was 1.5)
+    
+    float circumferentialGlow = abs(sin(vUv.x * 3.14159));
+    circumferentialGlow = pow(circumferentialGlow, 1.2); // Softer glow (was 0.8)
+    
+    float lighting = mix(0.5, 0.9, circumferentialGlow) * (0.7 + rimLight * 0.3);
+    
+    float pulse = sin(uTime * 0.5 + uIndex * 0.3) * 0.1 + 0.9; // Reduced variation (was 0.15 + 0.85)
+    float intensity = lighting * pulse;
+    
+    // Add some noise/texture
+    float noise = fract(sin(dot(vUv * 10.0, vec2(12.9898, 78.233))) * 43758.5453);
+    intensity *= (0.9 + noise * 0.1);
+    
+    gl_FragColor = vec4(color * intensity, intensity * 0.4);
+  }
+`
+
+interface WaveguideFieldProps {
+  position?: THREE.Vector3
+  colorPalette?: [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3]
+  isSelected?: boolean
+  onDoubleClick?: () => void
+}
+
+export default function WaveguideField({ 
+  position = new THREE.Vector3(0, 0, 0),
+  colorPalette,
+  isSelected = true,
+  onDoubleClick
+}: WaveguideFieldProps) {
+  const groupRef = useRef<THREE.Group>(null)
+  const [isFlat, setIsFlat] = useState(false)
+  const transitionProgress = useRef(0)
+  const { camera } = useThree()
+  
+  // Default color palette (current default colors)
+  const defaultColors: [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3] = useMemo(() => [
+    new THREE.Vector3(0.75, 0.55, 0.45), // color1 - peachy
+    new THREE.Vector3(0.65, 0.50, 0.60), // color2 - pink-lavender
+    new THREE.Vector3(0.50, 0.45, 0.60), // color3 - lavender
+    new THREE.Vector3(0.35, 0.40, 0.55), // color4 - blue-lavender
+  ], [])
+  
+  const colors = colorPalette || defaultColors
+
+  const beams = useMemo(() => {
+    const beamArray = []
+    const rows = 16
+    const beamsPerRow = 80
+
+    for (let row = 0; row < rows; row++) {
+      const rowProgress = row / (rows - 1)
+      const radius = 2.5 + rowProgress * 2
+
+      for (let i = 0; i < beamsPerRow; i++) {
+        const angle = (i / beamsPerRow) * Math.PI * 2
+
+        const circularX = Math.sin(angle) * radius
+        const circularZ = Math.cos(angle) * radius
+        const circularY = (Math.random() - 0.5) * 0.3
+
+        const flatX = (i / beamsPerRow) * 20 - 10
+        const flatY = circularY
+        const flatZ = (row / rows) * 8 - 4
+
+        const rotationY = -angle
+        const rotationZ = (Math.random() - 0.5) * 0.2
+
+        const length = 2.5 + Math.random() * 1.5
+        const thickness = 0.03 + Math.random() * 0.02
+
+        // Determine which quadrant (0-3) based on angle
+        const normalizedAngle = ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)
+        const quadrant = Math.floor((normalizedAngle / (Math.PI * 2)) * 4)
+        
+        // Position within the quadrant
+        const angleInQuadrant = normalizedAngle - quadrant * Math.PI * 0.5
+        const progressInQuadrant = angleInQuadrant / (Math.PI * 0.5)
+        const positionInQuadrant = Math.floor(progressInQuadrant * (beamsPerRow / 4))
+        
+        // Sequential index: quadrant order + position within quadrant + row offset
+        const bristlesPerQuadrant = beamsPerRow / 4
+        const sequentialIndex = quadrant * bristlesPerQuadrant + positionInQuadrant + row * beamsPerRow
+        const globalIndex = i + row * beamsPerRow
+
+        beamArray.push({
+          circularPosition: [circularX, circularY, circularZ] as [number, number, number],
+          flatPosition: [flatX, flatY, flatZ] as [number, number, number],
+          rotation: [0, rotationY, rotationZ] as [number, number, number],
+          flatRotation: [0, 0, rotationZ] as [number, number, number],
+          scale: [thickness, length, thickness] as [number, number, number],
+          index: globalIndex,
+          angle,
+          sequentialIndex, // Use sequential index for wave animation
+        })
+      }
+    }
+
+    return beamArray
+  }, [])
+
+  const handleDoubleClick = () => {
+    setIsFlat(!isFlat)
+    // Call the parent's onDoubleClick callback if provided
+    if (onDoubleClick) {
+      onDoubleClick()
+    }
+  }
+
+  useFrame((state, delta) => {
+    // Apply position to group
+    if (groupRef.current) {
+      groupRef.current.position.copy(position)
+    }
+
+    // Only control camera and transition if this field is selected AND double-clicked (flat view)
+    // Arrow key selection should not change camera - that's handled in page.tsx
+    if (isSelected) {
+      const targetProgress = isFlat ? 1 : 0
+      transitionProgress.current = THREE.MathUtils.lerp(transitionProgress.current, targetProgress, delta * 2)
+
+      // Only control camera when in flat view (double-clicked)
+      if (isFlat && transitionProgress.current > 0.5) {
+        camera.position.lerp(new THREE.Vector3(position.x, position.y, position.z + 12), delta * 2)
+        camera.lookAt(position.x, position.y, position.z)
+      }
+
+      // NO rotation for selected field - wave animation will be applied instead
+    } else {
+      // Continuous circular rotation for non-selected fields
+      if (groupRef.current) {
+        groupRef.current.rotation.y += delta * 0.1
+      }
+    }
+  })
+
+  return (
+    <>
+      {isSelected && (
+        <>
+          <ambientLight intensity={0.1} />
+          <pointLight position={[position.x, position.y + 5, position.z + 5]} intensity={0.3} color="#ffd4c8" />
+          <pointLight position={[position.x, position.y - 3, position.z - 5]} intensity={0.2} color="#b8a8d0" />
+        </>
+      )}
+      <group ref={groupRef} onDoubleClick={isSelected ? handleDoubleClick : undefined}>
+        {beams.map((beam, idx) => (
+          <AnimatedBeam 
+            key={idx} 
+            beam={beam} 
+            transitionProgress={transitionProgress.current}
+            colors={colors}
+            isSelected={isSelected}
+          />
+        ))}
+        <BeamAnimator beams={beams} />
+      </group>
+    </>
+  )
+}
+
+function AnimatedBeam({ 
+  beam, 
+  transitionProgress,
+  colors,
+  isSelected
+}: { 
+  beam: any
+  transitionProgress: number
+  colors: [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3]
+  isSelected: boolean
+}) {
+  const meshRef = useRef<THREE.Mesh>(null)
+
+  useFrame((state) => {
+    if (meshRef.current) {
+      const time = state.clock.elapsedTime
+      
+      // Apply wave animation only when selected
+      let rotationAngle = 0
+      if (isSelected) {
+        const normalizedAngle = ((beam.angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)
+        const cycleDuration = 12.0
+        const cycleTime = time % cycleDuration
+        const startAngle = Math.PI * 0.75 + Math.PI * 0.25
+        const animationProgress = cycleTime / cycleDuration
+        const currentAnimationAngle = (startAngle + animationProgress * Math.PI * 2) % (Math.PI * 2)
+
+        let bristleAngle = normalizedAngle
+        let animAngle = currentAnimationAngle
+
+        if (startAngle + animationProgress * Math.PI * 2 > Math.PI * 2) {
+          if (bristleAngle < startAngle && bristleAngle < Math.PI) {
+            bristleAngle += Math.PI * 2
+          }
+          animAngle = startAngle + animationProgress * Math.PI * 2
+        }
+
+        let shouldAnimate = false
+        if (animAngle >= startAngle) {
+          if (bristleAngle >= startAngle && bristleAngle <= animAngle) {
+            shouldAnimate = true
+          }
+        }
+
+        if (shouldAnimate) {
+          const angleDiff = bristleAngle - startAngle
+          const triggerProgress = angleDiff / (Math.PI * 2)
+          const triggerTime = triggerProgress * cycleDuration
+          const timeSinceTrigger = cycleTime - triggerTime
+          const easeDuration = 1.5 // Last 1.5 seconds of cycle will ease out
+          const timeUntilRestart = cycleDuration - cycleTime
+          let speedMultiplier = 1.0
+          
+          if (timeUntilRestart < easeDuration) {
+            // Ease out cubic: smooth deceleration
+            const easeProgress = timeUntilRestart / easeDuration
+            speedMultiplier = easeProgress * easeProgress * easeProgress
+          }
+          
+          const rotationSpeed = 0.5 * speedMultiplier
+          rotationAngle = timeSinceTrigger * Math.PI * 2 * rotationSpeed
+        }
+      }
+
+      const pos = new THREE.Vector3().lerpVectors(
+        new THREE.Vector3(...beam.circularPosition),
+        new THREE.Vector3(...beam.flatPosition),
+        transitionProgress,
+      )
+      meshRef.current.position.copy(pos)
+
+      // Apply wave rotation when selected, otherwise use base rotation
+      const baseRotation = new THREE.Euler(...beam.rotation)
+      const swingRotation = new THREE.Euler(baseRotation.x, baseRotation.y + rotationAngle, baseRotation.z)
+      const flatRotation = new THREE.Euler(...beam.flatRotation)
+      
+      const finalRotation = new THREE.Euler(
+        THREE.MathUtils.lerp(swingRotation.x, flatRotation.x, transitionProgress),
+        THREE.MathUtils.lerp(swingRotation.y, flatRotation.y, transitionProgress),
+        THREE.MathUtils.lerp(swingRotation.z, flatRotation.z, transitionProgress),
+      )
+      meshRef.current.rotation.copy(finalRotation)
+    }
+  })
+
+  return (
+    <mesh ref={meshRef} scale={beam.scale}>
+      <cylinderGeometry args={[1, 1, 1, 16, 8]} />
+      <shaderMaterial
+        vertexShader={vertexShader}
+        fragmentShader={fragmentShader}
+        uniforms={{
+          uTime: { value: 0 },
+          uIndex: { value: beam.index },
+          uColor1: { value: colors[0] },
+          uColor2: { value: colors[1] },
+          uColor3: { value: colors[2] },
+          uColor4: { value: colors[3] },
+        }}
+        transparent
+        blending={THREE.AdditiveBlending}
+        depthWrite={false}
+      />
+    </mesh>
+  )
+}
+
+function BeamAnimator({ beams }: { beams: any[] }) {
+  useFrame((state) => {
+    state.scene.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.material instanceof THREE.ShaderMaterial) {
+        child.material.uniforms.uTime.value = state.clock.elapsedTime
+      }
+    })
+  })
+
+  return null
+}
