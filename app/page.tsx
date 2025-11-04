@@ -160,12 +160,23 @@ function ImageOverlay({
   )
 }
 
-function CameraController({ selectedFieldX }: { selectedFieldX: number }) {
+function CameraController({ 
+  selectedFieldX, 
+  insideViewIndex, 
+  fields 
+}: { 
+  selectedFieldX: number
+  insideViewIndex: number | null
+  fields: Array<{ position: THREE.Vector3 }>
+}) {
   const { camera } = useThree()
   const fixedRotationRef = useRef<THREE.Euler | null>(null)
   const initializedRef = useRef(false)
+  const previousCameraStateRef = useRef<{ position: THREE.Vector3; rotation: THREE.Euler } | null>(null)
+  const initialInsideViewRotationRef = useRef<THREE.Euler | null>(null)
+  const hasSetInitialRotationRef = useRef(false)
 
-  useFrame(() => {
+  useFrame((state, delta) => {
     // Initialize camera rotation once to look straight ahead
     if (!initializedRef.current) {
       camera.lookAt(0, 0, 0)
@@ -173,29 +184,111 @@ function CameraController({ selectedFieldX }: { selectedFieldX: number }) {
       initializedRef.current = true
     }
 
-    // Smoothly shift camera horizontally to center on selected field
-    const targetX = selectedFieldX
-    const currentX = camera.position.x
-    const newX = THREE.MathUtils.lerp(currentX, targetX, 0.6)
-    
-    // Pure horizontal translation - keep Y and Z fixed
-    camera.position.x = newX
-    camera.position.y = 1
-    camera.position.z = 20
-    
-    // Lock rotation completely - no rotation changes, just pure translation
-    // This creates the "going down the line" effect
-    if (fixedRotationRef.current) {
-      camera.rotation.copy(fixedRotationRef.current)
+    if (insideViewIndex !== null) {
+      // Inside view mode - position camera at exact center of the field
+      const field = fields[insideViewIndex]
+      // Position at exact center: field position with Y at -1 (matching center field setup)
+      const targetPosition = new THREE.Vector3(field.position.x, -1, field.position.z)
+      
+      // Smoothly move camera to center of field
+      camera.position.lerp(targetPosition, delta * 3)
+      
+      // Once close enough, set exact position
+      if (camera.position.distanceTo(targetPosition) < 0.01) {
+        camera.position.copy(targetPosition)
+      }
+      
+      // Apply the stored initial rotation only once when entering (set in useEffect)
+      // After that, OrbitControls will handle rotation
+      if (initialInsideViewRotationRef.current && !hasSetInitialRotationRef.current) {
+        camera.rotation.copy(initialInsideViewRotationRef.current)
+        hasSetInitialRotationRef.current = true
+      }
+      
+      // Look around from inside - allow rotation (OrbitControls will handle it)
+    } else {
+      // Reset flag when exiting inside view
+      hasSetInitialRotationRef.current = false
+      // Normal view mode - restore previous camera state if coming from inside view
+      if (previousCameraStateRef.current) {
+        camera.position.lerp(previousCameraStateRef.current.position, delta * 2)
+        
+        // Manually interpolate rotation components
+        camera.rotation.x = THREE.MathUtils.lerp(camera.rotation.x, previousCameraStateRef.current.rotation.x, delta * 2)
+        camera.rotation.y = THREE.MathUtils.lerp(camera.rotation.y, previousCameraStateRef.current.rotation.y, delta * 2)
+        camera.rotation.z = THREE.MathUtils.lerp(camera.rotation.z, previousCameraStateRef.current.rotation.z, delta * 2)
+        
+        // If close enough, restore exact state
+        if (camera.position.distanceTo(previousCameraStateRef.current.position) < 0.1) {
+          camera.position.copy(previousCameraStateRef.current.position)
+          camera.rotation.copy(previousCameraStateRef.current.rotation)
+          previousCameraStateRef.current = null
+        }
+      } else {
+        // Smoothly shift camera horizontally to center on selected field
+        const targetX = selectedFieldX
+        const currentX = camera.position.x
+        const newX = THREE.MathUtils.lerp(currentX, targetX, 0.6)
+        
+        // Pure horizontal translation - keep Y and Z fixed
+        camera.position.x = newX
+        camera.position.y = 1
+        camera.position.z = 20
+        
+        // Lock rotation completely - no rotation changes, just pure translation
+        // This creates the "going down the line" effect
+        if (fixedRotationRef.current) {
+          camera.rotation.copy(fixedRotationRef.current)
+        }
+      }
     }
   })
+
+  // Store camera state when entering inside view and set initial rotation
+  useEffect(() => {
+    if (insideViewIndex !== null) {
+      if (previousCameraStateRef.current === null) {
+        previousCameraStateRef.current = {
+          position: camera.position.clone(),
+          rotation: camera.rotation.clone()
+        }
+      }
+      
+      // Reset the initial rotation flag when entering a new field
+      hasSetInitialRotationRef.current = false
+      
+      // Set initial rotation immediately based on the field center
+      const field = fields[insideViewIndex]
+      const fieldCenter = new THREE.Vector3(field.position.x, 0, field.position.z)
+      
+      // If we have a stored initial rotation, use it; otherwise, calculate it from center field
+      if (initialInsideViewRotationRef.current) {
+        // Apply the stored rotation (from center field)
+        camera.rotation.copy(initialInsideViewRotationRef.current)
+      } else {
+        // First time: calculate rotation by looking at field center from below
+        // Temporarily position camera to calculate the correct rotation
+        const savedPosition = camera.position.clone()
+        const tempPosition = new THREE.Vector3(field.position.x, -1, field.position.z)
+        camera.position.copy(tempPosition)
+        camera.lookAt(fieldCenter)
+        // Store this rotation for future use
+        initialInsideViewRotationRef.current = camera.rotation.clone()
+        // Restore camera position (useFrame will handle the transition)
+        camera.position.copy(savedPosition)
+      }
+    } else {
+      // Reset when exiting inside view
+      hasSetInitialRotationRef.current = false
+    }
+  }, [insideViewIndex, camera, fields])
 
   return null
 }
 
 export default function Page() {
   const [selectedIndex, setSelectedIndex] = useState(2) // 0: green, 1: purple, 2: center, 3: blue, 4: orange
-  const [doubleClickedIndex, setDoubleClickedIndex] = useState<number | null>(null) // Track which field is double-clicked
+  const [insideViewIndex, setInsideViewIndex] = useState<number | null>(null) // Track which field is in inside view mode
 
   // Color palettes for each field
   // Far Left: Green gradient (warmer, reduced brightness solid green tone)
@@ -252,7 +345,10 @@ export default function Page() {
     const threshold = 50 // Minimum accumulated scroll to trigger field change
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "ArrowLeft") {
+      if (event.key === "Escape") {
+        // Exit inside view mode
+        setInsideViewIndex(null)
+      } else if (event.key === "ArrowLeft") {
         setSelectedIndex((prev) => Math.max(0, prev - 1))
       } else if (event.key === "ArrowRight") {
         setSelectedIndex((prev) => Math.min(fields.length - 1, prev + 1))
@@ -313,8 +409,13 @@ export default function Page() {
           enableRotate={true}
           enablePan={false}
           enableZoom={true}
+          target={insideViewIndex !== null ? [fields[insideViewIndex].position.x, 0, fields[insideViewIndex].position.z] : [0, 0, 0]}
         />
-        <CameraController selectedFieldX={selectedFieldX} />
+        <CameraController 
+          selectedFieldX={selectedFieldX} 
+          insideViewIndex={insideViewIndex}
+          fields={fields}
+        />
         {fields.map((field, index) => {
           if (index === 0) {
             // Leftmost field (green) - use green image
@@ -383,14 +484,24 @@ export default function Page() {
             )
           }
         })}
-        {fields.map((field, index) => (
-          <WaveguideField
-            key={index}
-            position={field.position}
-            colorPalette={field.colorPalette}
-            isSelected={index === selectedIndex}
-          />
-        ))}
+        {fields.map((field, index) => {
+          // Only show field if no field is in inside view, or if this is the inside view field
+          const shouldShow = insideViewIndex === null || insideViewIndex === index
+          if (!shouldShow) return null
+
+          return (
+            <WaveguideField
+              key={index}
+              position={field.position}
+              colorPalette={field.colorPalette}
+              isSelected={index === selectedIndex}
+              onDoubleClick={() => {
+                // Toggle inside view: if already in inside view for this field, exit; otherwise enter
+                setInsideViewIndex(insideViewIndex === index ? null : index)
+              }}
+            />
+          )
+        })}
       </Canvas>
     </div>
   )

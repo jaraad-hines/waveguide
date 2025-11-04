@@ -1,6 +1,6 @@
 "use client"
 
-import { useRef, useMemo, useState } from "react"
+import { useRef, useMemo } from "react"
 import { useFrame, useThree } from "@react-three/fiber"
 import * as THREE from "three"
 
@@ -78,9 +78,7 @@ export default function WaveguideField({
   onDoubleClick
 }: WaveguideFieldProps) {
   const groupRef = useRef<THREE.Group>(null)
-  const [isFlat, setIsFlat] = useState(false)
   const transitionProgress = useRef(0)
-  const { camera } = useThree()
   
   // Default color palette (current default colors)
   const defaultColors: [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3] = useMemo(() => [
@@ -149,8 +147,7 @@ export default function WaveguideField({
   }, [])
 
   const handleDoubleClick = () => {
-    setIsFlat(!isFlat)
-    // Call the parent's onDoubleClick callback if provided
+    // Call the parent's onDoubleClick callback to trigger inside view
     if (onDoubleClick) {
       onDoubleClick()
     }
@@ -162,18 +159,10 @@ export default function WaveguideField({
       groupRef.current.position.copy(position)
     }
 
-    // Only control camera and transition if this field is selected AND double-clicked (flat view)
-    // Arrow key selection should not change camera - that's handled in page.tsx
+    // Keep transition progress at 0 (circular view only)
+    transitionProgress.current = 0
+
     if (isSelected) {
-      const targetProgress = isFlat ? 1 : 0
-      transitionProgress.current = THREE.MathUtils.lerp(transitionProgress.current, targetProgress, delta * 2)
-
-      // Only control camera when in flat view (double-clicked)
-      if (isFlat && transitionProgress.current > 0.5) {
-        camera.position.lerp(new THREE.Vector3(position.x, position.y, position.z + 12), delta * 2)
-        camera.lookAt(position.x, position.y, position.z)
-      }
-
       // NO rotation for selected field - wave animation will be applied instead
     } else {
       // Continuous circular rotation for non-selected fields
