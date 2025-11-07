@@ -69,13 +69,17 @@ interface WaveguideFieldProps {
   colorPalette?: [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3]
   isSelected?: boolean
   onDoubleClick?: () => void
+  onPointerEnter?: () => void
+  onPointerLeave?: () => void
 }
 
 export default function WaveguideField({ 
   position = new THREE.Vector3(0, 0, 0),
   colorPalette,
   isSelected = true,
-  onDoubleClick
+  onDoubleClick,
+  onPointerEnter,
+  onPointerLeave
 }: WaveguideFieldProps) {
   const groupRef = useRef<THREE.Group>(null)
   const transitionProgress = useRef(0)
@@ -181,7 +185,12 @@ export default function WaveguideField({
           <pointLight position={[position.x, position.y - 3, position.z - 5]} intensity={0.2} color="#b8a8d0" />
         </>
       )}
-      <group ref={groupRef} onDoubleClick={isSelected ? handleDoubleClick : undefined}>
+      <group 
+        ref={groupRef} 
+        onDoubleClick={isSelected ? handleDoubleClick : undefined}
+        onPointerEnter={onPointerEnter}
+        onPointerLeave={onPointerLeave}
+      >
         {beams.map((beam, idx) => (
           <AnimatedBeam 
             key={idx} 

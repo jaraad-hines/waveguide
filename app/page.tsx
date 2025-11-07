@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo, Suspense } from "react"
 import { Canvas, useFrame, useThree } from "@react-three/fiber"
-import { OrbitControls } from "@react-three/drei"
+import { OrbitControls, Html } from "@react-three/drei"
 import WaveguideField from "../components/waveguide_field"
 import * as THREE from "three"
 
@@ -286,9 +286,318 @@ function CameraController({
   return null
 }
 
+
+function HUDOverlay({ fieldPosition, text, isActive }: { fieldPosition: THREE.Vector3; text: string; isActive: boolean }) {
+  return (
+    <Html
+      position={[fieldPosition.x, -9, fieldPosition.z]}
+      center
+      transform
+      occlude={false}
+      distanceFactor={10}
+      style={{ 
+        pointerEvents: isActive ? 'auto' : 'none',
+        opacity: isActive ? 1 : 0,
+        transform: isActive ? 'scale(1)' : 'scale(0.9)',
+        transition: 'opacity 0.3s ease, transform 0.3s ease',
+      }}
+    >
+      <div
+        style={{
+          backgroundColor: 'rgba(200, 200, 200, 0.9)',
+          borderRadius: '24px',
+          padding: '12px 20px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '16px',
+          backdropFilter: 'blur(8px)',
+          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+          minWidth: '300px',
+          fontFamily: 'monospace',
+          fontSize: '16px',
+          color: '#000000',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+      >
+        {/* Text input area */}
+        <div style={{ 
+          flex: 1, 
+          overflow: 'hidden', 
+          textOverflow: 'ellipsis',
+          backgroundColor: 'rgba(150, 150, 150, 0.5)',
+          borderRadius: '12px',
+          padding: '8px 12px',
+          color: '#ffffff',
+        }}>
+          {text}
+        </div>
+        
+        {/* Control buttons */}
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          {/* Play/Pause button */}
+          <button
+            style={{
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '8px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#ffffff',
+            }}
+            onClick={(e) => {
+              e.stopPropagation()
+              // TODO: Add play/pause functionality
+            }}
+          >
+            {/* Pause icon: two vertical bars */}
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+              <rect x="6" y="4" width="3" height="12" />
+              <rect x="11" y="4" width="3" height="12" />
+            </svg>
+          </button>
+          
+          {/* Skip forward button */}
+          <button
+            style={{
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '8px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#ffffff',
+            }}
+            onClick={(e) => {
+              e.stopPropagation()
+              // TODO: Add skip functionality
+            }}
+          >
+            {/* Skip forward icon: triangle + vertical line */}
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M6 4 L14 10 L6 16 Z" />
+              <rect x="14" y="4" width="2" height="12" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </Html>
+  )
+}
+
+function HUDOverlayAttachments({ fieldPosition, text, isActive }: { fieldPosition: THREE.Vector3; text: string; isActive: boolean }) {
+  return (
+    <Html
+      position={[fieldPosition.x, -9, fieldPosition.z]}
+      center
+      transform
+      occlude={false}
+      distanceFactor={10}
+      style={{ 
+        pointerEvents: isActive ? 'auto' : 'none',
+        opacity: isActive ? 1 : 0,
+        transform: isActive ? 'scale(1)' : 'scale(0.9)',
+        transition: 'opacity 0.3s ease, transform 0.3s ease',
+      }}
+    >
+      <div
+        style={{
+          backgroundColor: 'rgba(200, 200, 200, 0.9)',
+          borderRadius: '24px',
+          padding: '12px 20px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '16px',
+          backdropFilter: 'blur(8px)',
+          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+          minWidth: '300px',
+          fontFamily: 'monospace',
+          fontSize: '16px',
+          color: '#000000',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+      >
+        {/* Text input area */}
+        <div style={{ 
+          flex: 1, 
+          overflow: 'hidden', 
+          textOverflow: 'ellipsis',
+          backgroundColor: 'rgba(150, 150, 150, 0.5)',
+          borderRadius: '12px',
+          padding: '8px 12px',
+          color: '#ffffff',
+        }}>
+          {text}
+        </div>
+        
+        {/* Control buttons */}
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          {/* Plus/Attachments button */}
+          <button
+            style={{
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '8px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#ffffff',
+            }}
+            onClick={(e) => {
+              e.stopPropagation()
+              // TODO: Add attachment functionality
+            }}
+          >
+            {/* Plus icon */}
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M10 4 L10 16 M4 10 L16 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          </button>
+          
+          {/* Skip forward button */}
+          <button
+            style={{
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '8px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#ffffff',
+            }}
+            onClick={(e) => {
+              e.stopPropagation()
+              // TODO: Add skip functionality
+            }}
+          >
+            {/* Skip forward icon: triangle + vertical line */}
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M6 4 L14 10 L6 16 Z" />
+              <rect x="14" y="4" width="2" height="12" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </Html>
+  )
+}
+
+function HUDOverlayPhone({ fieldPosition, text, isActive }: { fieldPosition: THREE.Vector3; text: string; isActive: boolean }) {
+  return (
+    <Html
+      position={[fieldPosition.x, -9, fieldPosition.z]}
+      center
+      transform
+      occlude={false}
+      distanceFactor={10}
+      style={{ 
+        pointerEvents: isActive ? 'auto' : 'none',
+        opacity: isActive ? 1 : 0,
+        transform: isActive ? 'scale(1)' : 'scale(0.9)',
+        transition: 'opacity 0.3s ease, transform 0.3s ease',
+      }}
+    >
+      <div
+        style={{
+          backgroundColor: 'rgba(200, 200, 200, 0.9)',
+          borderRadius: '24px',
+          padding: '12px 20px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '16px',
+          backdropFilter: 'blur(8px)',
+          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+          minWidth: '300px',
+          fontFamily: 'monospace',
+          fontSize: '16px',
+          color: '#000000',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+      >
+        {/* Text input area */}
+        <div style={{ 
+          flex: 1, 
+          overflow: 'hidden', 
+          textOverflow: 'ellipsis',
+          backgroundColor: 'rgba(150, 150, 150, 0.5)',
+          borderRadius: '12px',
+          padding: '8px 12px',
+          color: '#ffffff',
+        }}>
+          {text}
+        </div>
+        
+        {/* Control buttons */}
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          {/* Phone button */}
+          <button
+            style={{
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '8px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#ffffff',
+            }}
+            onClick={(e) => {
+              e.stopPropagation()
+              // TODO: Add phone functionality
+            }}
+          >
+            {/* Phone icon */}
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M4 2 C3 2 2 3 2 4 L2 16 C2 17 3 18 4 18 L6 18 L6 16 L4 16 L4 4 L16 4 L16 16 L14 16 L14 18 L16 18 C17 18 18 17 18 16 L18 4 C18 3 17 2 16 2 Z" />
+              <path d="M10 14 C10.5 14 11 14.5 11 15 C11 15.5 10.5 16 10 16 C9.5 16 9 15.5 9 15 C9 14.5 9.5 14 10 14 Z" />
+            </svg>
+          </button>
+          
+          {/* Skip forward button */}
+          <button
+            style={{
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '8px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#ffffff',
+            }}
+            onClick={(e) => {
+              e.stopPropagation()
+              // TODO: Add skip functionality
+            }}
+          >
+            {/* Skip forward icon: triangle + vertical line */}
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M6 4 L14 10 L6 16 Z" />
+              <rect x="14" y="4" width="2" height="12" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </Html>
+  )
+}
+
 export default function Page() {
   const [selectedIndex, setSelectedIndex] = useState(2) // 0: green, 1: purple, 2: center, 3: blue, 4: orange
   const [insideViewIndex, setInsideViewIndex] = useState<number | null>(null) // Track which field is in inside view mode
+  const [hudText, setHudText] = useState("") // Text displayed in HUD
+  const [hudText2, setHudText2] = useState("") // Text displayed in second HUD
+  const [activeHudIndex, setActiveHudIndex] = useState(0) // 0: first HUD, 1: second HUD
 
   // Color palettes for each field
   // Far Left: Green gradient (warmer, reduced brightness solid green tone)
@@ -345,13 +654,47 @@ export default function Page() {
     const threshold = 50 // Minimum accumulated scroll to trigger field change
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      // Don't capture typing if user is in an input field
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+        return
+      }
+      
       if (event.key === "Escape") {
-        // Exit inside view mode
-        setInsideViewIndex(null)
+        // Exit inside view mode or clear HUD text
+        if (insideViewIndex !== null) {
+          setInsideViewIndex(null)
+        } else {
+          // Clear active HUD text
+          if (activeHudIndex === 0) {
+            setHudText("")
+          } else {
+            setHudText2("")
+          }
+        }
       } else if (event.key === "ArrowLeft") {
         setSelectedIndex((prev) => Math.max(0, prev - 1))
       } else if (event.key === "ArrowRight") {
         setSelectedIndex((prev) => Math.min(fields.length - 1, prev + 1))
+      } else if (event.key === "ArrowDown") {
+        // Navigate to next HUD (or wrap to first)
+        setActiveHudIndex((prev) => (prev + 1) % 2)
+      } else if (event.key === "ArrowUp") {
+        // Navigate to previous HUD (or wrap to last)
+        setActiveHudIndex((prev) => (prev - 1 + 2) % 2)
+      } else if (event.key === "Backspace") {
+        // Handle backspace for active HUD
+        if (activeHudIndex === 0) {
+          setHudText((prev) => prev.slice(0, -1))
+        } else {
+          setHudText2((prev) => prev.slice(0, -1))
+        }
+      } else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
+        // Capture regular character input for active HUD
+        if (activeHudIndex === 0) {
+          setHudText((prev) => prev + event.key)
+        } else {
+          setHudText2((prev) => prev + event.key)
+        }
       }
     }
 
@@ -393,13 +736,18 @@ export default function Page() {
         clearTimeout(wheelTimeout)
       }
     }
-  }, [fields.length])
+  }, [fields.length, insideViewIndex, selectedIndex, activeHudIndex])
 
   const selectedFieldX = fields[selectedIndex].position.x
+  // Calculate offset for HUD positioning (same logic as menu bar)
+  const normalizedPosition = selectedFieldX / 30 // -1 to 1
+  const hudOffsetX = normalizedPosition * 30 // Scale to percentage offset
 
   return (
     <div className="w-full h-screen bg-black">
       <Canvas camera={{ position: [0, 1, 20], fov: 60, near: 0.1, far: 200 }} gl={{ antialias: true, alpha: false }}>
+        {/* Ambient light for HUD ridge */}
+        <ambientLight intensity={0.5} />
         <OrbitControls 
           enableDamping 
           dampingFactor={0.05} 
@@ -502,6 +850,14 @@ export default function Page() {
             />
           )
         })}
+        
+        {/* HUD Overlays under selected field - part of the 3D scene */}
+        {insideViewIndex === null && (
+          <>
+            <HUDOverlay fieldPosition={fields[selectedIndex].position} text={hudText} isActive={activeHudIndex === 0} />
+            <HUDOverlayAttachments fieldPosition={fields[selectedIndex].position} text={hudText2} isActive={activeHudIndex === 1} />
+          </>
+        )}
       </Canvas>
     </div>
   )
