@@ -169,12 +169,12 @@ function CameraController({
   insideViewIndex: number | null
   fields: Array<{ position: THREE.Vector3 }>
 }) {
-  const { camera } = useThree()
+  const { camera, size } = useThree()
   const fixedRotationRef = useRef<THREE.Euler | null>(null)
   const initializedRef = useRef(false)
   const previousCameraStateRef = useRef<{ position: THREE.Vector3; rotation: THREE.Euler } | null>(null)
-  const initialInsideViewRotationRef = useRef<THREE.Euler | null>(null)
   const hasSetInitialRotationRef = useRef(false)
+  const targetCameraStateRef = useRef<{ position: THREE.Vector3; rotation: THREE.Euler } | null>(null)
 
   useFrame((state, delta) => {
     // Initialize camera rotation once to look straight ahead
@@ -185,27 +185,69 @@ function CameraController({
     }
 
     if (insideViewIndex !== null) {
-      // Inside view mode - position camera at exact center of the field
+      // Fullscreen view mode - position camera in front of the filter object
       const field = fields[insideViewIndex]
-      // Position at exact center: field position with Y at -1 (matching center field setup)
-      const targetPosition = new THREE.Vector3(field.position.x, -1, field.position.z)
       
-      // Smoothly move camera to center of field
-      camera.position.lerp(targetPosition, delta * 3)
+      // Calculate field bounding box
+      // From WaveguideField: radius ranges from 2.5 to 4.5, beams extend upward 2.5-4.0 units
+      const maxRadius = 4.5
+      const maxBeamLength = 4.0
+      const fieldWidth = maxRadius * 2 // 9 units (diameter of circular field)
+      const fieldHeight = maxBeamLength + 0.3 // ~4.3 units (accounting for base Y variation)
       
-      // Once close enough, set exact position
-      if (camera.position.distanceTo(targetPosition) < 0.01) {
-        camera.position.copy(targetPosition)
+      // Field center (bristles are arranged in a circle, center at field position, Y around 0-2)
+      const fieldCenter = new THREE.Vector3(field.position.x, 1.5, field.position.z)
+      
+      // Calculate camera distance to frame the field so bristle ends are at screen edges
+      const fov = (camera as THREE.PerspectiveCamera).fov * (Math.PI / 180)
+      const aspect = size.width / size.height
+      
+      // Calculate distance needed to fit the field horizontally (circular field diameter)
+      // We want the full width (diameter) to fit in the viewport
+      const distanceHorizontal = (fieldWidth / 2) / Math.tan(fov / 2) / aspect
+      // Calculate distance needed to fit the field vertically (including beam height)
+      const distanceVertical = (fieldHeight / 2) / Math.tan(fov / 2)
+      
+      // Use the larger distance to ensure everything fits, with some padding
+      const distance = Math.max(distanceHorizontal, distanceVertical) * 1.1
+      
+      // Position camera directly in front of the field (positive Z direction)
+      // Keep camera at same X and Y as field center, but move forward along Z axis
+      const targetPosition = new THREE.Vector3(
+        fieldCenter.x,
+        fieldCenter.y,
+        fieldCenter.z + distance // Position camera in front (positive Z)
+      )
+      
+      // Calculate rotation to look directly at field center (front-facing view)
+      const direction = fieldCenter.clone().sub(targetPosition).normalize()
+      const targetRotation = new THREE.Euler(
+        Math.asin(-direction.y),
+        Math.atan2(direction.x, direction.z),
+        0
+      )
+      
+      // Store target state if not already set
+      if (!targetCameraStateRef.current) {
+        targetCameraStateRef.current = {
+          position: targetPosition.clone(),
+          rotation: targetRotation.clone()
+        }
       }
       
-      // Apply the stored initial rotation only once when entering (set in useEffect)
-      // After that, OrbitControls will handle rotation
-      if (initialInsideViewRotationRef.current && !hasSetInitialRotationRef.current) {
-        camera.rotation.copy(initialInsideViewRotationRef.current)
-        hasSetInitialRotationRef.current = true
-      }
+      // Smoothly move camera to target position
+      camera.position.lerp(targetCameraStateRef.current.position, delta * 3)
       
-      // Look around from inside - allow rotation (OrbitControls will handle it)
+      // Smoothly rotate camera to target rotation
+      camera.rotation.x = THREE.MathUtils.lerp(camera.rotation.x, targetCameraStateRef.current.rotation.x, delta * 3)
+      camera.rotation.y = THREE.MathUtils.lerp(camera.rotation.y, targetCameraStateRef.current.rotation.y, delta * 3)
+      camera.rotation.z = THREE.MathUtils.lerp(camera.rotation.z, targetCameraStateRef.current.rotation.z, delta * 3)
+      
+      // Once close enough, set exact state
+      if (camera.position.distanceTo(targetCameraStateRef.current.position) < 0.01) {
+        camera.position.copy(targetCameraStateRef.current.position)
+        camera.rotation.copy(targetCameraStateRef.current.rotation)
+      }
     } else {
       // Reset flag when exiting inside view
       hasSetInitialRotationRef.current = false
@@ -244,7 +286,7 @@ function CameraController({
     }
   })
 
-  // Store camera state when entering inside view and set initial rotation
+  // Store camera state when entering inside view and calculate target camera position
   useEffect(() => {
     if (insideViewIndex !== null) {
       if (previousCameraStateRef.current === null) {
@@ -254,32 +296,15 @@ function CameraController({
         }
       }
       
+      // Reset target camera state so it gets recalculated in useFrame
+      targetCameraStateRef.current = null
+      
       // Reset the initial rotation flag when entering a new field
       hasSetInitialRotationRef.current = false
-      
-      // Set initial rotation immediately based on the field center
-      const field = fields[insideViewIndex]
-      const fieldCenter = new THREE.Vector3(field.position.x, 0, field.position.z)
-      
-      // If we have a stored initial rotation, use it; otherwise, calculate it from center field
-      if (initialInsideViewRotationRef.current) {
-        // Apply the stored rotation (from center field)
-        camera.rotation.copy(initialInsideViewRotationRef.current)
-      } else {
-        // First time: calculate rotation by looking at field center from below
-        // Temporarily position camera to calculate the correct rotation
-        const savedPosition = camera.position.clone()
-        const tempPosition = new THREE.Vector3(field.position.x, -1, field.position.z)
-        camera.position.copy(tempPosition)
-        camera.lookAt(fieldCenter)
-        // Store this rotation for future use
-        initialInsideViewRotationRef.current = camera.rotation.clone()
-        // Restore camera position (useFrame will handle the transition)
-        camera.position.copy(savedPosition)
-      }
     } else {
       // Reset when exiting inside view
       hasSetInitialRotationRef.current = false
+      targetCameraStateRef.current = null
     }
   }, [insideViewIndex, camera, fields])
 
@@ -843,10 +868,6 @@ export default function Page() {
               position={field.position}
               colorPalette={field.colorPalette}
               isSelected={index === selectedIndex}
-              onDoubleClick={() => {
-                // Toggle inside view: if already in inside view for this field, exit; otherwise enter
-                setInsideViewIndex(insideViewIndex === index ? null : index)
-              }}
             />
           )
         })}
