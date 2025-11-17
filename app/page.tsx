@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useMemo, Suspense } from "react"
 import { Canvas, useFrame, useThree } from "@react-three/fiber"
 import { OrbitControls, Html } from "@react-three/drei"
 import WaveguideField from "../components/waveguide_field"
+import DomeScene from "../components/dome_scene"
 import * as THREE from "three"
 
 function CircularRedX({ centerPosition }: { centerPosition: THREE.Vector3 }) {
@@ -623,6 +624,7 @@ export default function Page() {
   const [hudText, setHudText] = useState("") // Text displayed in HUD
   const [hudText2, setHudText2] = useState("") // Text displayed in second HUD
   const [activeHudIndex, setActiveHudIndex] = useState(0) // 0: first HUD, 1: second HUD
+  const [isDomeScene, setIsDomeScene] = useState(false)
 
   // Color palettes for each field
   // Far Left: Green gradient (warmer, reduced brightness solid green tone)
@@ -685,15 +687,19 @@ export default function Page() {
       }
       
       if (event.key === "Escape") {
-        // Exit inside view mode or clear HUD text
-        if (insideViewIndex !== null) {
-          setInsideViewIndex(null)
+        if (isDomeScene) {
+          setIsDomeScene(false)
         } else {
-          // Clear active HUD text
-          if (activeHudIndex === 0) {
-            setHudText("")
+          // Exit inside view mode or clear HUD text
+          if (insideViewIndex !== null) {
+            setInsideViewIndex(null)
           } else {
-            setHudText2("")
+            // Clear active HUD text
+            if (activeHudIndex === 0) {
+              setHudText("")
+            } else {
+              setHudText2("")
+            }
           }
         }
       } else if (event.key === "ArrowLeft") {
@@ -761,7 +767,7 @@ export default function Page() {
         clearTimeout(wheelTimeout)
       }
     }
-  }, [fields.length, insideViewIndex, selectedIndex, activeHudIndex])
+  }, [fields.length, insideViewIndex, selectedIndex, activeHudIndex, isDomeScene])
 
   const selectedFieldX = fields[selectedIndex].position.x
   // Calculate offset for HUD positioning (same logic as menu bar)
@@ -784,100 +790,110 @@ export default function Page() {
           enableZoom={true}
           target={insideViewIndex !== null ? [fields[insideViewIndex].position.x, 0, fields[insideViewIndex].position.z] : [0, 0, 0]}
         />
-        <CameraController 
-          selectedFieldX={selectedFieldX} 
-          insideViewIndex={insideViewIndex}
-          fields={fields}
-        />
-        {fields.map((field, index) => {
-          if (index === 0) {
-            // Leftmost field (green) - use green image
-            return (
-              <Suspense 
-                key={`overlay-${index}`}
-                fallback={
-                  <CircularRedX centerPosition={field.position} />
-                }
-              >
-                <CircularImageOverlay centerPosition={field.position} imagePath="/images/time-up-green.png" />
-              </Suspense>
-            )
-          } else if (index === 1) {
-            // Purple field - use purple image
-            return (
-              <Suspense 
-                key={`overlay-${index}`}
-                fallback={
-                  <CircularRedX centerPosition={field.position} />
-                }
-              >
-                <CircularImageOverlay centerPosition={field.position} imagePath="/images/time-up-purple.png" />
-              </Suspense>
-            )
-          } else if (index === 2) {
-            // Center field - use brown image
-            return (
-              <Suspense 
-                key={`overlay-${index}`}
-                fallback={
-                  <CircularRedX centerPosition={field.position} />
-                }
-              >
-                <CircularImageOverlay centerPosition={field.position} imagePath="/images/time-up-brown.png" />
-              </Suspense>
-            )
-          } else if (index === 3) {
-            // Blue field - use blue image
-            return (
-              <Suspense 
-                key={`overlay-${index}`}
-                fallback={
-                  <CircularRedX centerPosition={field.position} />
-                }
-              >
-                <CircularImageOverlay centerPosition={field.position} imagePath="/images/time-up-blue.png" />
-              </Suspense>
-            )
-          } else if (index === 4) {
-            // Rightmost field (orange) - use tangerine image
-            return (
-              <Suspense 
-                key={`overlay-${index}`}
-                fallback={
-                  <CircularRedX centerPosition={field.position} />
-                }
-              >
-                <CircularImageOverlay centerPosition={field.position} imagePath="/images/time-up-tangerine.png" />
-              </Suspense>
-            )
-          } else {
-            // Other fields - use red X (shouldn't happen with 5 fields)
-            return (
-              <CircularRedX key={`x-${index}`} centerPosition={field.position} />
-            )
-          }
-        })}
-        {fields.map((field, index) => {
-          // Only show field if no field is in inside view, or if this is the inside view field
-          const shouldShow = insideViewIndex === null || insideViewIndex === index
-          if (!shouldShow) return null
-
-          return (
-            <WaveguideField
-              key={index}
-              position={field.position}
-              colorPalette={field.colorPalette}
-              isSelected={index === selectedIndex}
-            />
-          )
-        })}
-        
-        {/* HUD Overlays under selected field - part of the 3D scene */}
-        {insideViewIndex === null && (
+        {!isDomeScene && (
           <>
-            <HUDOverlay fieldPosition={fields[selectedIndex].position} text={hudText} isActive={activeHudIndex === 0} />
-            <HUDOverlayAttachments fieldPosition={fields[selectedIndex].position} text={hudText2} isActive={activeHudIndex === 1} />
+            <CameraController 
+              selectedFieldX={selectedFieldX} 
+              insideViewIndex={insideViewIndex}
+              fields={fields}
+            />
+            {fields.map((field, index) => {
+              if (index === 0) {
+                return (
+                  <Suspense 
+                    key={`overlay-${index}`}
+                    fallback={
+                      <CircularRedX centerPosition={field.position} />
+                    }
+                  >
+                    <CircularImageOverlay centerPosition={field.position} imagePath="/images/time-up-green.png" />
+                  </Suspense>
+                )
+              } else if (index === 1) {
+                return (
+                  <Suspense 
+                    key={`overlay-${index}`}
+                    fallback={
+                      <CircularRedX centerPosition={field.position} />
+                    }
+                  >
+                    <CircularImageOverlay centerPosition={field.position} imagePath="/images/time-up-purple.png" />
+                  </Suspense>
+                )
+              } else if (index === 2) {
+                return (
+                  <Suspense 
+                    key={`overlay-${index}`}
+                    fallback={
+                      <CircularRedX centerPosition={field.position} />
+                    }
+                  >
+                    <CircularImageOverlay centerPosition={field.position} imagePath="/images/time-up-brown.png" />
+                  </Suspense>
+                )
+              } else if (index === 3) {
+                return (
+                  <Suspense 
+                    key={`overlay-${index}`}
+                    fallback={
+                      <CircularRedX centerPosition={field.position} />
+                    }
+                  >
+                    <CircularImageOverlay centerPosition={field.position} imagePath="/images/time-up-blue.png" />
+                  </Suspense>
+                )
+              } else if (index === 4) {
+                return (
+                  <Suspense 
+                    key={`overlay-${index}`}
+                    fallback={
+                      <CircularRedX centerPosition={field.position} />
+                    }
+                  >
+                    <CircularImageOverlay centerPosition={field.position} imagePath="/images/time-up-tangerine.png" />
+                  </Suspense>
+                )
+              } else {
+                return (
+                  <CircularRedX key={`x-${index}`} centerPosition={field.position} />
+                )
+              }
+            })}
+            {fields.map((field, index) => {
+              const shouldShow = insideViewIndex === null || insideViewIndex === index
+              if (!shouldShow) return null
+
+              return (
+                <WaveguideField
+                  key={index}
+                  position={field.position}
+                  colorPalette={field.colorPalette}
+                  isSelected={index === selectedIndex}
+                  onDoubleClick={
+                    index === selectedIndex
+                      ? () => {
+                          setIsDomeScene(true)
+                        }
+                      : undefined
+                  }
+                />
+              )
+            })}
+            
+            {insideViewIndex === null && (
+              <>
+                <HUDOverlay fieldPosition={fields[selectedIndex].position} text={hudText} isActive={activeHudIndex === 0} />
+                <HUDOverlayAttachments fieldPosition={fields[selectedIndex].position} text={hudText2} isActive={activeHudIndex === 1} />
+              </>
+            )}
           </>
+        )}
+        {isDomeScene && (
+          <DomeScene
+            onExit={() => {
+              setIsDomeScene(false)
+            }}
+          />
         )}
       </Canvas>
     </div>
