@@ -5,6 +5,7 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber"
 import { OrbitControls, Html } from "@react-three/drei"
 import WaveguideField from "../components/waveguide_field"
 import DomeScene from "../components/dome_scene"
+import { createWaveguideBristles } from "../components/bristleLayout"
 import * as THREE from "three"
 
 function CircularRedX({ centerPosition }: { centerPosition: THREE.Vector3 }) {
@@ -626,6 +627,9 @@ export default function Page() {
   const [activeHudIndex, setActiveHudIndex] = useState(0) // 0: first HUD, 1: second HUD
   const [isDomeScene, setIsDomeScene] = useState(false)
 
+  // Generate bristles once - shared across WaveguideField and DomeScene
+  const bristles = useMemo(() => createWaveguideBristles(), [])
+
   // Color palettes for each field
   // Far Left: Green gradient (warmer, reduced brightness solid green tone)
   const greenPalette: [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3] = [
@@ -869,6 +873,7 @@ export default function Page() {
                   position={field.position}
                   colorPalette={field.colorPalette}
                   isSelected={index === selectedIndex}
+                  bristles={bristles}
                   onDoubleClick={
                     index === selectedIndex
                       ? () => {
@@ -890,6 +895,7 @@ export default function Page() {
         )}
         {isDomeScene && (
           <DomeScene
+            bristles={bristles}
             onExit={() => {
               setIsDomeScene(false)
             }}

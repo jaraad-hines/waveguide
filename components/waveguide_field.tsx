@@ -3,6 +3,7 @@
 import { useRef, useMemo } from "react"
 import { useFrame, useThree } from "@react-three/fiber"
 import * as THREE from "three"
+import { BristleSpec } from "./bristleLayout"
 
 const vertexShader = `
   varying vec2 vUv;
@@ -71,6 +72,7 @@ interface WaveguideFieldProps {
   onDoubleClick?: () => void
   onPointerEnter?: () => void
   onPointerLeave?: () => void
+  bristles: BristleSpec[]
 }
 
 export default function WaveguideField({ 
@@ -79,7 +81,8 @@ export default function WaveguideField({
   isSelected = true,
   onDoubleClick,
   onPointerEnter,
-  onPointerLeave
+  onPointerLeave,
+  bristles
 }: WaveguideFieldProps) {
   const groupRef = useRef<THREE.Group>(null)
   const transitionProgress = useRef(0)
@@ -94,61 +97,7 @@ export default function WaveguideField({
   
   const colors = colorPalette || defaultColors
 
-  const beams = useMemo(() => {
-    const beamArray = []
-    const rows = 16
-    const beamsPerRow = 80
-
-    for (let row = 0; row < rows; row++) {
-      const rowProgress = row / (rows - 1)
-      const radius = 2.5 + rowProgress * 2
-
-      for (let i = 0; i < beamsPerRow; i++) {
-        const angle = (i / beamsPerRow) * Math.PI * 2
-
-        const circularX = Math.sin(angle) * radius
-        const circularZ = Math.cos(angle) * radius
-        const circularY = (Math.random() - 0.5) * 0.3
-
-        const flatX = (i / beamsPerRow) * 20 - 10
-        const flatY = circularY
-        const flatZ = (row / rows) * 8 - 4
-
-        const rotationY = -angle
-        const rotationZ = (Math.random() - 0.5) * 0.2
-
-        const length = 2.5 + Math.random() * 1.5
-        const thickness = 0.03 + Math.random() * 0.02
-
-        // Determine which quadrant (0-3) based on angle
-        const normalizedAngle = ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)
-        const quadrant = Math.floor((normalizedAngle / (Math.PI * 2)) * 4)
-        
-        // Position within the quadrant
-        const angleInQuadrant = normalizedAngle - quadrant * Math.PI * 0.5
-        const progressInQuadrant = angleInQuadrant / (Math.PI * 0.5)
-        const positionInQuadrant = Math.floor(progressInQuadrant * (beamsPerRow / 4))
-        
-        // Sequential index: quadrant order + position within quadrant + row offset
-        const bristlesPerQuadrant = beamsPerRow / 4
-        const sequentialIndex = quadrant * bristlesPerQuadrant + positionInQuadrant + row * beamsPerRow
-        const globalIndex = i + row * beamsPerRow
-
-        beamArray.push({
-          circularPosition: [circularX, circularY, circularZ] as [number, number, number],
-          flatPosition: [flatX, flatY, flatZ] as [number, number, number],
-          rotation: [0, rotationY, rotationZ] as [number, number, number],
-          flatRotation: [0, 0, rotationZ] as [number, number, number],
-          scale: [thickness, length, thickness] as [number, number, number],
-          index: globalIndex,
-          angle,
-          sequentialIndex, // Use sequential index for wave animation
-        })
-      }
-    }
-
-    return beamArray
-  }, [])
+  const beams = bristles
 
   const handleDoubleClick = () => {
     // Call the parent's onDoubleClick callback to trigger inside view
@@ -200,7 +149,7 @@ export default function WaveguideField({
             isSelected={isSelected}
           />
         ))}
-        <BeamAnimator beams={beams} />
+        <BeamAnimator />
       </group>
     </>
   )
@@ -212,7 +161,7 @@ function AnimatedBeam({
   colors,
   isSelected
 }: { 
-  beam: any
+  beam: BristleSpec
   transitionProgress: number
   colors: [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3]
   isSelected: boolean
@@ -313,7 +262,7 @@ function AnimatedBeam({
   )
 }
 
-function BeamAnimator({ beams }: { beams: any[] }) {
+function BeamAnimator() {
   useFrame((state) => {
     state.scene.traverse((child) => {
       if (child instanceof THREE.Mesh && child.material instanceof THREE.ShaderMaterial) {
