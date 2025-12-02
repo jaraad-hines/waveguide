@@ -47,8 +47,8 @@ function CircularRedX({ centerPosition }: { centerPosition: THREE.Vector3 }) {
 }
 
 function CircularImageOverlay({ centerPosition, imagePath }: { centerPosition: THREE.Vector3; imagePath: string }) {
-  const radius = 6.3
-  const height = 5
+  const radius = 15.4
+  const height = 9.3
   const radialSegments = 64
   const heightSegments = 32
   const [texture, setTexture] = useState<THREE.Texture | null>(null)
@@ -120,7 +120,7 @@ function createBristleGeometry() {
   // Base cylinder of height 1; we'll scale it per bristle
   const radiusTop = 0.03
   const radiusBottom = 0.03
-  const height = 1
+  const height = 1.5
   const radialSegments = 8
   const heightSegments = 1
   const geom = new THREE.CylinderGeometry(radiusTop, radiusBottom, height, radialSegments, heightSegments)
@@ -172,16 +172,6 @@ export default function DomeScene({ onExit, bristles, colorPalette }: DomeSceneP
     },
     [colorPalette],
   )
-
-  // Compute dome color from palette - use color4 (the darkest color, like the bottom of waveguide gradient)
-  // and darken it further for the dome background
-  const domeColor = useMemo(() => {
-    const sourcePalette = colorPalette || defaultPalette
-    // Use color4 (index 3) which is the darkest color in the palette, matching the bottom of the waveguide gradient
-    const baseColor = new THREE.Color(sourcePalette[3].x, sourcePalette[3].y, sourcePalette[3].z)
-    // Darken the color for the dome background while preserving the color theme
-    return baseColor.multiplyScalar(0.25) // Darken but keep the color character
-  }, [colorPalette])
 
   // Color palettes for each waveguide field (matching page.tsx)
   const greenPalette: [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3] = [
@@ -293,6 +283,18 @@ export default function DomeScene({ onExit, bristles, colorPalette }: DomeSceneP
       imagePath: "/images/time-up-tangerine.png"
     },
   ], [domeRadius, colorPalette, defaultPalette, greenPalette, purplePalette, bluePalette, orangePalette])
+
+  // Compute dome color from palette - use color4 (the darkest color, like the bottom of waveguide gradient)
+  // and darken it further for the dome background
+  // Use the selected field's color palette to match the cylinder object
+  const domeColor = useMemo(() => {
+    const selectedField = fields[selectedFieldIndex]
+    const sourcePalette = selectedField ? selectedField.colorPalette : (colorPalette || defaultPalette)
+    // Use color4 (index 3) which is the darkest color in the palette, matching the bottom of the waveguide gradient
+    const baseColor = new THREE.Color(sourcePalette[3].x, sourcePalette[3].y, sourcePalette[3].z)
+    // Darken the color for the dome background while preserving the color theme
+    return baseColor.multiplyScalar(0.25) // Darken but keep the color character
+  }, [fields, selectedFieldIndex, colorPalette, defaultPalette])
 
   // Map shared bristles -> rim strips with derived scale + color
   const rimStrips = useMemo(
@@ -444,7 +446,7 @@ export default function DomeScene({ onExit, bristles, colorPalette }: DomeSceneP
   return (
     <group ref={groupRef}>
       {/* Dome hemisphere */}
-      <mesh rotation={[0, 0, 0]}>
+      <mesh position={[0, Y_RIM - domeRadius * 0.8, 0]} rotation={[0, 0, 0]}>
         <sphereGeometry args={[domeRadius, 64, 64, 0, Math.PI * 2, 0, Math.PI / 2]} />
         <meshBasicMaterial
           color={domeColor}
