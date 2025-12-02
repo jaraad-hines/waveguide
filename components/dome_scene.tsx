@@ -134,7 +134,7 @@ export default function DomeScene({ onExit, bristles, colorPalette }: DomeSceneP
   const centerBristleRef = useRef<THREE.Mesh>(null)
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
   const [selectedFieldIndex, setSelectedFieldIndex] = useState(2) // Start at center field (index 2)
-  const [cameraMode, setCameraMode] = useState<"rim" | "top" | "bottom">("rim")
+  const [cameraMode, setCameraMode] = useState<"rim" | "top" | "bottom">("bottom")
   const { camera } = useThree()
 
   const N_BRISTLES = bristles.length
