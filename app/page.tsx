@@ -625,7 +625,7 @@ export default function Page() {
   const [hudText, setHudText] = useState("") // Text displayed in HUD
   const [hudText2, setHudText2] = useState("") // Text displayed in second HUD
   const [activeHudIndex, setActiveHudIndex] = useState(0) // 0: first HUD, 1: second HUD
-  const [isDomeScene, setIsDomeScene] = useState(false)
+  const [isDomeScene, setIsDomeScene] = useState(true) // Start with dome scene instead of waveguide scene
 
   // Generate bristles once - shared across WaveguideField and DomeScene
   const bristles = useMemo(() => createWaveguideBristles(), [])
