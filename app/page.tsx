@@ -896,6 +896,7 @@ export default function Page() {
         {isDomeScene && (
           <DomeScene
             bristles={bristles}
+            colorPalette={fields[selectedIndex]?.colorPalette}
             onExit={() => {
               setIsDomeScene(false)
             }}
