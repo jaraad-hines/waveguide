@@ -1,0 +1,15 @@
+# Python dependencies for YouTube Playlist Plasticity Engine
+
+# YouTube API
+google-api-python-client>=2.100.0
+
+# Embeddings
+sentence-transformers>=2.2.0
+torch>=2.0.0  # Required by sentence-transformers
+
+# Numerical computing
+numpy>=1.24.0
+
+# Optional: Better embeddings (if you want to use OpenAI, etc.)
+# openai>=1.0.0
+
