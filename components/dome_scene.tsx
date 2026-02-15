@@ -7,6 +7,7 @@ import * as THREE from "three"
 import { BristleSpec } from "./bristleLayout"
 import WaveguideField from "./waveguide_field"
 import WindowPlayer from "./WindowPlayer"
+import PlasticityLinkPanel from "./PlasticityLinkPanel"
 import { TaggingService } from "../services/taggingService"
 import { TaggedContent, WindowPlayer as WindowPlayerType } from "../types/tensol"
 import { TensorService } from "../services/tensorService"
@@ -1064,6 +1065,9 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
 
       {/* Grip Mode HUD - Conflict/Facet Meter */}
       <ConflictMeterHUD conflict={conflict} facets={facets} domeRadius={domeRadius} />
+
+      {/* Plasticity Link Panel - Script Runner */}
+      <PlasticityLinkPanel domeRadius={domeRadius} />
 
       {/* Visual feedback: Grip mode indicators */}
       {gripMode === "event_lensing" && lensActiveRef.current && (
