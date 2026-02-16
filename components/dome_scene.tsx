@@ -1,18 +1,21 @@
 "use client"
 
-import { useMemo, useRef, useState, useEffect, Suspense } from "react"
+import { useMemo, useRef, useState, useEffect, Suspense, type CSSProperties } from "react"
 import { useFrame, useThree } from "@react-three/fiber"
 import { Html } from "@react-three/drei"
 import * as THREE from "three"
+import { Menu, Grid2X2, Gauge, Link2 } from "lucide-react"
 import { BristleSpec } from "./bristleLayout"
 import WaveguideField from "./waveguide_field"
 import WindowPlayer from "./WindowPlayer"
 import PlasticityLinkPanel from "./PlasticityLinkPanel"
+import QuadrantBorders from "./QuadrantBorders"
 import { TaggingService } from "../services/taggingService"
 import { TaggedContent, WindowPlayer as WindowPlayerType } from "../types/tensol"
 import { TensorService } from "../services/tensorService"
 import { TensorContent } from "../types/tensor"
 import { extractMusicMetadata, validateMusicFile } from "../services/musicFileUtils"
+import { extractPlaylistId } from "../services/youtubeApi"
 
 // Grip mode types
 export type GripMode = "orbit_scan" | "meridian_dive" | "helical_descent" | "event_lensing" | "tensol_jump"
@@ -52,6 +55,12 @@ const GRIP_MODES: Record<GripMode, GripModeConfig> = {
 }
 
 const GRIP_MODE_ORDER: GripMode[] = ["orbit_scan", "meridian_dive", "helical_descent", "event_lensing", "tensol_jump"]
+const PLAYLIST_URL = "https://youtube.com/playlist?list=PLEyw_05gE1Q-8ZLM7Jkb45ynL8F9Xv1tB&si=gEq8TbEcHM-3SK12"
+const PLAYLIST_LIST_ID = extractPlaylistId(PLAYLIST_URL) ?? ""
+const PLAYLIST_VISIBLE_COUNT = 4
+const PLAYLIST_MAX_INDEX = 200
+const QUADRANT_OUTER_RADIUS_FACTOR = 0.995
+const QUADRANT_INNER_CLEARANCE = 1
 
 interface DomeSceneProps {
   onExit: () => void
@@ -177,12 +186,66 @@ function createBristleGeometry() {
   return geom
 }
 
+function buildDonutSectorClipPath({
+  startDeg,
+  endDeg,
+  innerRadiusPct,
+  outerRadiusPct,
+  gapDeg = 0.8,
+  arcSteps = 18,
+}: {
+  startDeg: number
+  endDeg: number
+  innerRadiusPct: number
+  outerRadiusPct: number
+  gapDeg?: number
+  arcSteps?: number
+}) {
+  const points: Array<{ x: number; y: number }> = []
+
+  const normalizedEnd = endDeg <= startDeg ? endDeg + 360 : endDeg
+  const start = startDeg + gapDeg * 0.5
+  const end = normalizedEnd - gapDeg * 0.5
+
+  const toPoint = (deg: number, radiusPct: number) => {
+    const rad = (deg * Math.PI) / 180
+    return {
+      x: 50 + Math.cos(rad) * radiusPct,
+      y: 50 + Math.sin(rad) * radiusPct,
+    }
+  }
+
+  for (let i = 0; i <= arcSteps; i += 1) {
+    const t = i / arcSteps
+    const deg = start + (end - start) * t
+    points.push(toPoint(deg, outerRadiusPct))
+  }
+
+  for (let i = arcSteps; i >= 0; i -= 1) {
+    const t = i / arcSteps
+    const deg = start + (end - start) * t
+    points.push(toPoint(deg, innerRadiusPct))
+  }
+
+  return `polygon(${points.map((p) => `${p.x.toFixed(3)}% ${p.y.toFixed(3)}%`).join(", ")})`
+}
+
 // Mode Ring HUD Component
-function ModeRingHUD({ activeMode, modes, domeRadius }: { activeMode: GripMode; modes: GripMode[]; domeRadius: number }) {
+function ModeRingHUD({
+  activeMode,
+  modes,
+  domeRadius,
+  verticalDirection,
+}: {
+  activeMode: GripMode
+  modes: GripMode[]
+  domeRadius: number
+  verticalDirection: 1 | -1
+}) {
   const activeIndex = modes.indexOf(activeMode)
   
   return (
-    <Html position={[0, -domeRadius * 0.6, 0]} center>
+    <Html position={[0, domeRadius * 0.6 * verticalDirection, 0]} center>
       <div
         style={{
           display: "flex",
@@ -240,14 +303,24 @@ function ModeRingHUD({ activeMode, modes, domeRadius }: { activeMode: GripMode; 
 }
 
 // Conflict/Facet Meter HUD Component
-function ConflictMeterHUD({ conflict, facets, domeRadius }: { conflict: number; facets: number; domeRadius: number }) {
+function ConflictMeterHUD({
+  conflict,
+  facets,
+  domeRadius,
+  verticalDirection,
+}: {
+  conflict: number
+  facets: number
+  domeRadius: number
+  verticalDirection: 1 | -1
+}) {
   // conflict: 0-1 (0.9-0.98 typical range from sim)
   // facets: 1-4 (number of walker disagreements)
   
   const normalizedConflict = Math.max(0, Math.min(1, (conflict - 0.9) / 0.08)) // Map 0.9-0.98 to 0-1
   
   return (
-    <Html position={[domeRadius * 0.7, -domeRadius * 0.6, 0]}>
+    <Html position={[domeRadius * 0.7, domeRadius * 0.6 * verticalDirection, 0]}>
       <div
         style={{
           display: "flex",
@@ -322,6 +395,126 @@ function ConflictMeterHUD({ conflict, facets, domeRadius }: { conflict: number; 
   )
 }
 
+function SceneToolbar({
+  isOpen,
+  setIsOpen,
+  showQuadrantViewport,
+  setShowQuadrantViewport,
+  showConflictMeter,
+  setShowConflictMeter,
+  showPlasticity,
+  setShowPlasticity,
+}: {
+  isOpen: boolean
+  setIsOpen: (open: boolean) => void
+  showQuadrantViewport: boolean
+  setShowQuadrantViewport: (show: boolean) => void
+  showConflictMeter: boolean
+  setShowConflictMeter: (show: boolean) => void
+  showPlasticity: boolean
+  setShowPlasticity: (show: boolean) => void
+}) {
+  const toggleButtonStyle = (active: boolean): CSSProperties => ({
+    width: "38px",
+    height: "38px",
+    borderRadius: "10px",
+    border: active ? "1px solid rgba(125, 180, 255, 0.95)" : "1px solid rgba(255,255,255,0.18)",
+    background: active ? "rgba(72, 114, 171, 0.72)" : "rgba(20,22,28,0.82)",
+    color: "rgba(245,245,245,0.96)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
+  })
+
+  return (
+    <Html
+      fullscreen
+      style={{
+        pointerEvents: "none",
+        position: "absolute",
+        inset: 0,
+      }}
+    >
+      <div
+        style={{
+          position: "fixed",
+          right: "-580px",
+          top: "50%",
+          transform: "translateY(-50%)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "8px",
+          alignItems: "flex-end",
+          pointerEvents: "auto",
+          userSelect: "none",
+          zIndex: 1200,
+        }}
+      >
+        {isOpen && (
+          <div
+            style={{
+              padding: "8px",
+              borderRadius: "12px",
+              border: "1px solid rgba(255,255,255,0.16)",
+              background: "rgba(9, 11, 16, 0.88)",
+              backdropFilter: "blur(6px)",
+              display: "flex",
+              flexDirection: "column",
+              gap: "8px",
+            }}
+          >
+            <button
+              type="button"
+              title="Quadrant Viewport"
+              onClick={() => setShowQuadrantViewport(!showQuadrantViewport)}
+              style={toggleButtonStyle(showQuadrantViewport)}
+            >
+              <Grid2X2 size={18} />
+            </button>
+            <button
+              type="button"
+              title="Conflict / Facets"
+              onClick={() => setShowConflictMeter(!showConflictMeter)}
+              style={toggleButtonStyle(showConflictMeter)}
+            >
+              <Gauge size={18} />
+            </button>
+            <button
+              type="button"
+              title="Plasticity"
+              onClick={() => setShowPlasticity(!showPlasticity)}
+              style={toggleButtonStyle(showPlasticity)}
+            >
+              <Link2 size={18} />
+            </button>
+          </div>
+        )}
+        <button
+          type="button"
+          title={isOpen ? "Close Toolbar" : "Open Toolbar"}
+          onClick={() => setIsOpen(!isOpen)}
+          style={{
+            width: "46px",
+            height: "46px",
+            borderRadius: "14px",
+            border: "1px solid rgba(255,255,255,0.2)",
+            background: "rgba(11, 13, 20, 0.95)",
+            color: "rgba(245,245,245,0.96)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "pointer",
+            boxShadow: "0 8px 20px rgba(0,0,0,0.35)",
+          }}
+        >
+          <Menu size={20} />
+        </button>
+      </div>
+    </Html>
+  )
+}
+
 export default function DomeScene({ onExit, bristles, colorPalette, tensorServiceRef: externalTensorServiceRef }: DomeSceneProps) {
   const groupRef = useRef<THREE.Group>(null)
   const bristleGroupRef = useRef<THREE.Group>(null)
@@ -329,6 +522,13 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
   const [selectedFieldIndex, setSelectedFieldIndex] = useState(2) // Start at center field (index 2)
   const [cameraMode, setCameraMode] = useState<"rim" | "top" | "bottom">("bottom")
+  const [quadrantOrientation, setQuadrantOrientation] = useState<"top" | "bottom">("bottom")
+  const [isToolbarOpen, setIsToolbarOpen] = useState(false)
+  const [showQuadrantViewport, setShowQuadrantViewport] = useState(false)
+  const [showConflictMeter, setShowConflictMeter] = useState(false)
+  const [showPlasticityPanel, setShowPlasticityPanel] = useState(false)
+  const [playlistMode, setPlaylistMode] = useState<"fifo" | "lifo">("fifo")
+  const [playlistWindowStart, setPlaylistWindowStart] = useState(0)
   
   // Grip mode state
   const [gripMode, setGripMode] = useState<GripMode>("orbit_scan")
@@ -348,7 +548,19 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   const jumpTargetRef = useRef<THREE.Vector3 | null>(null)
   const jumpProgressRef = useRef(0)
   
-  const { camera } = useThree()
+  const { camera, size } = useThree()
+  const [quadrantViewportMetrics, setQuadrantViewportMetrics] = useState({
+    diameterPx: 620,
+    innerRadiusPct: 26,
+  })
+
+  const handlePlaylistStepForward = () => {
+    setPlaylistWindowStart((prev) => Math.min(prev + 1, PLAYLIST_MAX_INDEX - PLAYLIST_VISIBLE_COUNT))
+  }
+
+  const handlePlaylistStepBackward = () => {
+    setPlaylistWindowStart((prev) => Math.max(prev - 1, 0))
+  }
 
   // Tagging system state
   const taggingServiceRef = useRef<TaggingService>(new TaggingService())
@@ -424,10 +636,6 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
       setTensorContents(tensorServiceRef.current.getAllContents())
     }
     return success
-  }
-
-  const getMusicFilesByTensol = (tensolIndex: number) => {
-    return tensorServiceRef.current.getContentsByTensol(tensolIndex)
   }
 
   // Sync tensor contents state
@@ -557,9 +765,38 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   const domeRadius = useMemo(() => R_rim * 1.05, [R_rim])
   const Y_RIM = useMemo(() => -domeRadius * 0.3, [domeRadius])
 
-  // Waveguide field definitions - positions are calculated dynamically based on selection
-  // The waveguide field has a max radius of about 4.5 units
-  const waveguideFieldRadius = 4.5
+  // Center waveguide is rendered at scale [2,2,2], so derive true outer radius from actual bristle geometry.
+  const baleenOuterRadius = useMemo(() => {
+    if (bristles.length === 0) return 9
+    let maxRenderedRadius = 0
+
+    // Shader displaces local X/Z up to about sqrt(0.05^2 + 0.03^2); include scaled safety.
+    const shaderDisplacementPadding = 0.12
+
+    for (const bristle of bristles) {
+      const [cx, cy, cz] = bristle.circularPosition
+      const thickness = bristle.scale[0]
+      const halfLength = bristle.scale[1] * 0.5
+      const rotation = new THREE.Euler(bristle.rotation[0], bristle.rotation[1], bristle.rotation[2])
+
+      // Sample top/bottom rings of the cylinder to capture tilt-driven radial overshoot.
+      for (const y of [-halfLength, halfLength]) {
+        for (let i = 0; i < 8; i += 1) {
+          const theta = (i / 8) * Math.PI * 2
+          const local = new THREE.Vector3(Math.cos(theta) * thickness, y, Math.sin(theta) * thickness)
+          local.applyEuler(rotation)
+          const worldX = cx + local.x
+          const worldZ = cz + local.z
+          const radial = Math.hypot(worldX, worldZ)
+          if (radial > maxRenderedRadius) {
+            maxRenderedRadius = radial
+          }
+        }
+      }
+    }
+
+    return maxRenderedRadius * 2 + shaderDisplacementPadding
+  }, [bristles])
   // Calculate the gap between outer rim and dome object
   const rimToDomeGap = useMemo(() => domeRadius - R_rim, [domeRadius, R_rim])
   // Spacing between fields: base spacing + 1.0 times the gap between rim and dome (0.5 + 0.5)
@@ -800,6 +1037,16 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
     }
   }, [onExit, fields.length, fields])
 
+  // Quadrant viewport orientation only updates at the extreme camera positions.
+  // `rim` keeps the last extreme orientation instead of flipping mid-transition.
+  useEffect(() => {
+    if (cameraMode === "top") {
+      setQuadrantOrientation("top")
+    } else if (cameraMode === "bottom") {
+      setQuadrantOrientation("bottom")
+    }
+  }, [cameraMode])
+
   useFrame((state, delta) => {
     const t = state.clock.elapsedTime
 
@@ -867,6 +1114,65 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
         })
       }
     }
+
+    // Derive viewport sizing from projected inner/outer quadrant radii.
+    // Middle camera mode should stay on low/bottom viewport profile.
+    const effectiveViewportMode: "top" | "bottom" = cameraMode === "rim" ? "bottom" : cameraMode
+    const projectionCamera =
+      effectiveViewportMode === cameraMode
+        ? camera
+        : new THREE.PerspectiveCamera(
+            camera instanceof THREE.PerspectiveCamera ? camera.fov : 50,
+            camera instanceof THREE.PerspectiveCamera ? camera.aspect : size.width / Math.max(1, size.height),
+            camera.near,
+            camera.far
+          )
+
+    if (projectionCamera !== camera) {
+      projectionCamera.position.set(
+        0,
+        effectiveViewportMode === "top" ? domeRadius * 2 : -domeRadius * 2,
+        0.001
+      )
+      projectionCamera.lookAt(0, 0, 0)
+      projectionCamera.updateProjectionMatrix()
+      projectionCamera.updateMatrixWorld(true)
+    }
+
+    const planeY = Y_RIM + 0.02
+    const centerWorld = new THREE.Vector3(0, planeY, 0)
+    const outerWorld = new THREE.Vector3(quadrantSectionOuterRadius, planeY, 0)
+    const innerWorld = new THREE.Vector3(quadrantSectionInnerRadius, planeY, 0)
+
+    const toScreen = (point: THREE.Vector3) => {
+      const projected = point.clone().project(projectionCamera)
+      return {
+        x: (projected.x * 0.5 + 0.5) * size.width,
+        y: (-projected.y * 0.5 + 0.5) * size.height,
+      }
+    }
+
+    const c = toScreen(centerWorld)
+    const o = toScreen(outerWorld)
+    const i = toScreen(innerWorld)
+    const domeEdge = toScreen(new THREE.Vector3(domeRadius * 0.98, planeY, 0))
+
+    const outerPx = Math.max(1, Math.hypot(o.x - c.x, o.y - c.y))
+    const innerPx = Math.max(0, Math.hypot(i.x - c.x, i.y - c.y))
+    const domePx = Math.max(1, Math.hypot(domeEdge.x - c.x, domeEdge.y - c.y))
+
+    const nextDiameter = Math.max(260, Math.min(domePx * 2, size.width * 0.86, outerPx * 2))
+    const nextInnerPct = Math.max(0, Math.min(49.5, (innerPx / outerPx) * 50))
+
+    if (
+      Math.abs(nextDiameter - quadrantViewportMetrics.diameterPx) > 0.75 ||
+      Math.abs(nextInnerPct - quadrantViewportMetrics.innerRadiusPct) > 0.25
+    ) {
+      setQuadrantViewportMetrics({
+        diameterPx: nextDiameter,
+        innerRadiusPct: nextInnerPct,
+      })
+    }
   })
 
   const handleRimClick = () => {
@@ -916,19 +1222,64 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
     })
   }
 
-  // Initialize tensols (quadrants) - 4 quadrants around the dome
-  const tensols = useMemo(() => {
-    const quadrantAngles = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2]
-    return quadrantAngles.map((angle, index) => ({
-      id: `tensol-${index}`,
-      quadrantIndex: index,
-      position: [
-        Math.cos(angle) * domeRadius * 0.7,
-        Y_RIM,
-        Math.sin(angle) * domeRadius * 0.7,
-      ] as [number, number, number],
-    }))
-  }, [domeRadius, Y_RIM])
+  const basePlaylistIndices = useMemo(
+    () => Array.from({ length: PLAYLIST_VISIBLE_COUNT }, (_, index) => playlistWindowStart + index),
+    [playlistWindowStart]
+  )
+
+  const visiblePlaylistIndices = useMemo(
+    () => (playlistMode === "fifo" ? basePlaylistIndices : [...basePlaylistIndices].reverse()),
+    [playlistMode, basePlaylistIndices]
+  )
+
+  const quadrantOuterRadius = useMemo(() => domeRadius * QUADRANT_OUTER_RADIUS_FACTOR, [domeRadius])
+  const quadrantInnerRadius = useMemo(
+    () => Math.min(baleenOuterRadius + QUADRANT_INNER_CLEARANCE, quadrantOuterRadius - 0.05),
+    [baleenOuterRadius, quadrantOuterRadius]
+  )
+  // Expanded quadrant section edges for dome-scale partitioning.
+  // These become the single source of truth for both edges and viewport shaping.
+  const quadrantSectionOuterRadius = useMemo(
+    () => Math.min(domeRadius * QUADRANT_OUTER_RADIUS_FACTOR, domeRadius * 0.98),
+    [domeRadius]
+  )
+  const quadrantSectionInnerRadius = useMemo(
+    () => Math.max(domeRadius * 0.11, quadrantInnerRadius * 0.38),
+    [domeRadius, quadrantInnerRadius]
+  )
+  const quadrantSectors = useMemo(() => {
+    const gapDeg = 0.9
+    // Middle camera mode should stay on low/bottom sector orientation/mapping.
+    const effectiveQuadrantOrientation = cameraMode === "rim" ? "bottom" : quadrantOrientation
+    const indexOffset = effectiveQuadrantOrientation === "top" ? 2 : 0
+    const innerRadiusPct = quadrantViewportMetrics.innerRadiusPct
+    const outerRadiusPct = 50
+    const base = [
+      // These angular boundaries match the 4 radial edge lines in QuadrantBorders.
+      { id: "quadrant-ne", startDeg: -90, endDeg: 0, slot: 0 },
+      { id: "quadrant-nw", startDeg: -180, endDeg: -90, slot: 1 },
+      { id: "quadrant-sw", startDeg: 90, endDeg: 180, slot: 2 },
+      { id: "quadrant-se", startDeg: 0, endDeg: 90, slot: 3 },
+    ]
+
+    return base.map((sector) => {
+      const rotatedStart = sector.startDeg + (effectiveQuadrantOrientation === "top" ? 180 : 0)
+      const rotatedEnd = sector.endDeg + (effectiveQuadrantOrientation === "top" ? 180 : 0)
+      return {
+        ...sector,
+        clipPath: buildDonutSectorClipPath({
+          startDeg: rotatedStart,
+          endDeg: rotatedEnd,
+          innerRadiusPct,
+          outerRadiusPct,
+          gapDeg,
+        }),
+        playlistIndex: visiblePlaylistIndices[(sector.slot + indexOffset) % 4] ?? sector.slot,
+      }
+    })
+  }, [visiblePlaylistIndices, quadrantOrientation, quadrantViewportMetrics.innerRadiusPct, cameraMode])
+  const verticalDirection: 1 | -1 = cameraMode === "top" ? 1 : -1
+  const isRimMiddleView = cameraMode === "rim"
 
   return (
     <group ref={groupRef}>
@@ -1005,33 +1356,90 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
         <meshBasicMaterial color={new THREE.Color(1.0, 0.9, 0.8)} />
       </mesh>
 
-      {/* Tensol quadrants visualization */}
-      {tensols.map((tensol) => {
-        const musicFiles = getMusicFilesByTensol(tensol.quadrantIndex)
-        const hasMusic = musicFiles.length > 0
-        
-        return (
-          <group key={tensol.id} position={tensol.position}>
-            {/* Base tensol sphere */}
-            <mesh>
-              <sphereGeometry args={[0.3, 16, 16]} />
-              <meshBasicMaterial 
-                color={hasMusic ? new THREE.Color(0.2, 0.8, 0.2) : new THREE.Color(0.8, 0.2, 0.2)} 
-                transparent 
-                opacity={hasMusic ? 0.8 : 0.6} 
-              />
-            </mesh>
-            
-            {/* Visual indicator for music files count */}
-            {hasMusic && (
-              <mesh position={[0, 0.5, 0]}>
-                <cylinderGeometry args={[0.1, 0.1, 0.2, 8]} />
-                <meshBasicMaterial color={new THREE.Color(0.2, 0.9, 0.4)} />
-              </mesh>
-            )}
-          </group>
-        )
-      })}
+      {/* Inner/outer borders and quadrant edge lines */}
+      <QuadrantBorders
+        y={Y_RIM + 0.02}
+        innerRadius={quadrantSectionInnerRadius}
+        outerRadius={quadrantSectionOuterRadius}
+        color={new THREE.Color(0.85, 0.38, 0.26)}
+        opacity={0.92}
+      />
+
+      {showQuadrantViewport && (
+        <>
+          {/* Quadrant object as a 4-part viewport (absorbs per-quadrant viewport behavior) */}
+          <Html
+            position={[0, Y_RIM + 0.02, 0]}
+            center
+            occlude={false}
+            style={{ pointerEvents: "auto" }}
+          >
+            <div
+              style={{
+                position: "relative",
+                width: `${quadrantViewportMetrics.diameterPx}px`,
+                height: `${quadrantViewportMetrics.diameterPx}px`,
+                borderRadius: "50%",
+                overflow: "hidden",
+                transform: isRimMiddleView
+                  ? "perspective(1600px) rotateX(78deg) scale(1.28, 0.4) translateY(-46%)"
+                  : "none",
+                transformOrigin: "center center",
+              }}
+            >
+              {quadrantSectors.map((sector) => {
+                const embedSrc = PLAYLIST_LIST_ID
+                  ? `https://www.youtube.com/embed/videoseries?list=${PLAYLIST_LIST_ID}&index=${sector.playlistIndex}`
+                  : ""
+
+                return (
+                  <div
+                    key={sector.id}
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      clipPath: sector.clipPath,
+                      border: "1px solid rgba(219, 138, 103, 0.85)",
+                      background: "rgba(8, 8, 10, 0.75)",
+                      boxShadow: "0 0 14px rgba(219, 138, 103, 0.2)",
+                      overflow: "hidden",
+                    }}
+                  >
+                    {embedSrc ? (
+                      <iframe
+                        width={quadrantViewportMetrics.diameterPx}
+                        height={quadrantViewportMetrics.diameterPx}
+                        src={embedSrc}
+                        title={`Quadrant video ${sector.playlistIndex + 1}`}
+                        frameBorder="0"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                        allowFullScreen
+                        style={{ border: "none" }}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          color: "rgba(255,255,255,0.75)",
+                          fontSize: "12px",
+                          width: "100%",
+                          height: "100%",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          textAlign: "center",
+                          padding: "12px",
+                        }}
+                      >
+                        Playlist ID not found in URL.
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </Html>
+        </>
+      )}
 
       {/* Window players */}
       {Array.from(windowPlayers.values()).map((player) => {
@@ -1061,13 +1469,49 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
       })}
 
       {/* Grip Mode HUD - Mode Ring */}
-      <ModeRingHUD activeMode={gripMode} modes={GRIP_MODE_ORDER} domeRadius={domeRadius} />
+      <ModeRingHUD
+        activeMode={gripMode}
+        modes={GRIP_MODE_ORDER}
+        domeRadius={domeRadius}
+        verticalDirection={verticalDirection}
+      />
 
       {/* Grip Mode HUD - Conflict/Facet Meter */}
-      <ConflictMeterHUD conflict={conflict} facets={facets} domeRadius={domeRadius} />
+      {showConflictMeter && (
+        <ConflictMeterHUD
+          conflict={conflict}
+          facets={facets}
+          domeRadius={domeRadius}
+          verticalDirection={verticalDirection}
+        />
+      )}
 
       {/* Plasticity Link Panel - Script Runner */}
-      <PlasticityLinkPanel domeRadius={domeRadius} />
+      {showPlasticityPanel && (
+        <PlasticityLinkPanel
+          domeRadius={domeRadius}
+          verticalDirection={verticalDirection}
+          playlistControls={{
+            mode: playlistMode,
+            onModeChange: setPlaylistMode,
+            onStepForward: handlePlaylistStepForward,
+            onStepBackward: handlePlaylistStepBackward,
+            visibleIndices: visiblePlaylistIndices,
+            playlistId: PLAYLIST_LIST_ID,
+          }}
+        />
+      )}
+
+      <SceneToolbar
+        isOpen={isToolbarOpen}
+        setIsOpen={setIsToolbarOpen}
+        showQuadrantViewport={showQuadrantViewport}
+        setShowQuadrantViewport={setShowQuadrantViewport}
+        showConflictMeter={showConflictMeter}
+        setShowConflictMeter={setShowConflictMeter}
+        showPlasticity={showPlasticityPanel}
+        setShowPlasticity={setShowPlasticityPanel}
+      />
 
       {/* Visual feedback: Grip mode indicators */}
       {gripMode === "event_lensing" && lensActiveRef.current && (

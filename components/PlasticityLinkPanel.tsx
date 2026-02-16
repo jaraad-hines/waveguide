@@ -17,9 +17,23 @@ interface PlasticityLink {
 interface PlasticityLinkPanelProps {
   domeRadius: number
   onArtifactGenerated?: (artifact: any) => void
+  verticalDirection?: 1 | -1
+  playlistControls?: {
+    mode: "fifo" | "lifo"
+    onModeChange: (mode: "fifo" | "lifo") => void
+    onStepForward: () => void
+    onStepBackward: () => void
+    visibleIndices: number[]
+    playlistId?: string
+  }
 }
 
-export default function PlasticityLinkPanel({ domeRadius, onArtifactGenerated }: PlasticityLinkPanelProps) {
+export default function PlasticityLinkPanel({
+  domeRadius,
+  onArtifactGenerated,
+  verticalDirection = -1,
+  playlistControls,
+}: PlasticityLinkPanelProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [links, setLinks] = useState<PlasticityLink[]>([])
   const [newLabel, setNewLabel] = useState("")
@@ -124,7 +138,7 @@ export default function PlasticityLinkPanel({ domeRadius, onArtifactGenerated }:
   }
 
   return (
-    <Html position={[-domeRadius * 0.7, -domeRadius * 0.6, 0]}>
+    <Html position={[-domeRadius * 0.7, domeRadius * 0.6 * verticalDirection, 0]}>
       <div
         style={{
           display: "flex",
@@ -169,6 +183,57 @@ export default function PlasticityLinkPanel({ domeRadius, onArtifactGenerated }:
                 <X className="w-4 h-4" />
               </button>
             </div>
+
+            {/* Playlist controls */}
+            {playlistControls && (
+              <div className="mb-4 p-3 bg-gray-800/60 border border-gray-700 rounded space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-gray-300">Quadrant Playlist</span>
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => playlistControls.onModeChange("fifo")}
+                      className={`px-2 py-1 text-[10px] rounded border ${
+                        playlistControls.mode === "fifo"
+                          ? "bg-blue-900/60 border-blue-600 text-blue-200"
+                          : "bg-gray-900/50 border-gray-700 text-gray-400"
+                      }`}
+                    >
+                      FIFO
+                    </button>
+                    <button
+                      onClick={() => playlistControls.onModeChange("lifo")}
+                      className={`px-2 py-1 text-[10px] rounded border ${
+                        playlistControls.mode === "lifo"
+                          ? "bg-amber-900/60 border-amber-600 text-amber-200"
+                          : "bg-gray-900/50 border-gray-700 text-gray-400"
+                      }`}
+                    >
+                      LIFO
+                    </button>
+                  </div>
+                </div>
+                <div className="text-[11px] text-gray-400">
+                  Showing videos: {playlistControls.visibleIndices.map((idx) => idx + 1).join(", ")}
+                </div>
+                {playlistControls.playlistId && (
+                  <div className="text-[10px] text-gray-500 truncate">Playlist: {playlistControls.playlistId}</div>
+                )}
+                <div className="flex gap-2">
+                  <button
+                    onClick={playlistControls.onStepBackward}
+                    className="flex-1 px-2 py-1 text-xs bg-gray-700/60 hover:bg-gray-600/60 rounded text-white transition-colors"
+                  >
+                    Prev
+                  </button>
+                  <button
+                    onClick={playlistControls.onStepForward}
+                    className="flex-1 px-2 py-1 text-xs bg-blue-900/60 hover:bg-blue-800/60 rounded text-white transition-colors"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Links list */}
             <div className="space-y-3 mb-4">
