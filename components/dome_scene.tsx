@@ -764,6 +764,9 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
 
   const domeRadius = useMemo(() => R_rim * 1.05, [R_rim])
   const Y_RIM = useMemo(() => -domeRadius * 0.3, [domeRadius])
+  const domeCenterY = useMemo(() => Y_RIM - domeRadius * 0.8, [Y_RIM, domeRadius])
+  // Raise quadrant edges relative to the rim plane
+  const quadrantPlaneY = useMemo(() => Y_RIM + domeRadius * 0.15, [Y_RIM, domeRadius])
 
   // Center waveguide is rendered at scale [2,2,2], so derive true outer radius from actual bristle geometry.
   const baleenOuterRadius = useMemo(() => {
@@ -1139,7 +1142,7 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
       projectionCamera.updateMatrixWorld(true)
     }
 
-    const planeY = Y_RIM + 0.02
+    const planeY = quadrantPlaneY
     const centerWorld = new THREE.Vector3(0, planeY, 0)
     const outerWorld = new THREE.Vector3(quadrantSectionOuterRadius, planeY, 0)
     const innerWorld = new THREE.Vector3(quadrantSectionInnerRadius, planeY, 0)
@@ -1243,9 +1246,19 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
     () => Math.min(domeRadius * QUADRANT_OUTER_RADIUS_FACTOR, domeRadius * 0.98),
     [domeRadius]
   )
+  // Preserve current visual inner radius sizing, then lock it to a rim-relative ratio.
+  // This keeps the same size while deriving/sticking from dome/rim radius math.
+  const quadrantSectionInnerRadiusTarget = useMemo(
+    () => Math.min(baleenOuterRadius + 0.5, quadrantSectionOuterRadius - 0.05),
+    [baleenOuterRadius, quadrantSectionOuterRadius]
+  )
+  const quadrantSectionInnerRimRatio = useMemo(
+    () => THREE.MathUtils.clamp(quadrantSectionInnerRadiusTarget / Math.max(domeRadius, 0.0001), 0, 0.98),
+    [quadrantSectionInnerRadiusTarget, domeRadius]
+  )
   const quadrantSectionInnerRadius = useMemo(
-    () => Math.max(domeRadius * 0.11, quadrantInnerRadius * 0.38),
-    [domeRadius, quadrantInnerRadius]
+    () => Math.min(domeRadius * quadrantSectionInnerRimRatio, quadrantSectionOuterRadius - 0.05),
+    [domeRadius, quadrantSectionInnerRimRatio, quadrantSectionOuterRadius]
   )
   const quadrantSectors = useMemo(() => {
     const gapDeg = 0.9
@@ -1284,7 +1297,7 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   return (
     <group ref={groupRef}>
       {/* Dome hemisphere */}
-      <mesh position={[0, Y_RIM - domeRadius * 0.8, 0]} rotation={[0, 0, 0]}>
+      <mesh position={[0, domeCenterY, 0]} rotation={[0, 0, 0]}>
         <sphereGeometry args={[domeRadius, 64, 64, 0, Math.PI * 2, 0, Math.PI / 2]} />
         <meshBasicMaterial
           color={domeColor}
@@ -1358,9 +1371,12 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
 
       {/* Inner/outer borders and quadrant edge lines */}
       <QuadrantBorders
-        y={Y_RIM + 0.02}
+        y={quadrantPlaneY}
         innerRadius={quadrantSectionInnerRadius}
         outerRadius={quadrantSectionOuterRadius}
+        domeRadius={domeRadius}
+        domeCenterY={domeCenterY}
+        surfaceOffset={0.03}
         color={new THREE.Color(0.85, 0.38, 0.26)}
         opacity={0.92}
       />
@@ -1369,7 +1385,7 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
         <>
           {/* Quadrant object as a 4-part viewport (absorbs per-quadrant viewport behavior) */}
           <Html
-            position={[0, Y_RIM + 0.02, 0]}
+            position={[0, quadrantPlaneY, 0]}
             center
             occlude={false}
             style={{ pointerEvents: "auto" }}
