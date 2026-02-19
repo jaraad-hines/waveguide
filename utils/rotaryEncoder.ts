@@ -89,6 +89,89 @@ export type RotaryFrameStore = {
   clear: () => void
 }
 
+export type RotaryArchitectureTier = "core" | "sub" | "detail"
+
+export type RotaryArchitectureSimulationId = "isp_3d_hybrid_reference" | "native_rotary_projection"
+
+export type RotaryArchitectureTemplate = {
+  id: string
+  label: string
+  tier: RotaryArchitectureTier
+  weight: number
+  description: string
+}
+
+export type RotaryArchitectureNode = RotaryArchitectureTemplate & {
+  salience: number
+  miniObjId: number
+  bandIndices: number[]
+  bristleIds: number[]
+}
+
+export type RotaryArchitectureSimulation = {
+  id: RotaryArchitectureSimulationId
+  title: string
+  problem: string
+  reasoning: string
+  budgets: { core: number; sub: number; detail: number }
+  nodes: RotaryArchitectureNode[]
+}
+
+export const ROTARY_ARCHITECTURE_TEMPLATE_LIBRARY: Record<RotaryArchitectureSimulationId, RotaryArchitectureTemplate[]> = {
+  isp_3d_hybrid_reference: [
+    { id: "isp_logic_core", label: "ISP Logic Core", tier: "core", weight: 0.26, description: "Primary pixel pipeline compute plane" },
+    { id: "dram_3d_stack", label: "3D-DRAM Stack", tier: "core", weight: 0.3, description: "High-capacity, low-access-energy local stack" },
+    { id: "sram_3d_slice", label: "3D-SRAM Slice", tier: "core", weight: 0.2, description: "Low-latency hot-set cache tier" },
+    { id: "hybrid_arbiter", label: "Hybrid Arbiter", tier: "core", weight: 0.24, description: "Partition controller across SRAM/DRAM tiers" },
+    { id: "lpddr_spill", label: "LPDDR Spill", tier: "sub", weight: 0.22, description: "Off-chip fallback traffic lane" },
+    { id: "snapshot_buffer", label: "Snapshot Buffer", tier: "sub", weight: 0.18, description: "Burst frame staging for 2MP/12MP capture" },
+    { id: "compressor_frontend", label: "Compression Frontend", tier: "sub", weight: 0.17, description: "Compression path to reduce footprint" },
+    { id: "tsv_fabric", label: "TSV Fabric", tier: "sub", weight: 0.23, description: "Vertical interconnect transport mesh" },
+    { id: "dram_scheduler", label: "DRAM Scheduler", tier: "sub", weight: 0.2, description: "Access ordering and burst packing control" },
+    { id: "leakage_guard", label: "Leakage Guard", tier: "detail", weight: 0.34, description: "SRAM leakage mitigation policy" },
+    { id: "bandwidth_qos", label: "Bandwidth QoS", tier: "detail", weight: 0.33, description: "QoS shaping for ISP/CV/ML contention" },
+    { id: "power_budget_gate", label: "Power Budget Gate", tier: "detail", weight: 0.33, description: "Budget lock for wearable thermal envelope" },
+  ],
+  native_rotary_projection: [
+    { id: "rotary_router_core", label: "Rotary Router Core", tier: "core", weight: 0.28, description: "Encoder-driven routing kernel" },
+    { id: "band_beamformer", label: "Band Beamformer", tier: "core", weight: 0.24, description: "Directional lobe synthesis from theta bands" },
+    { id: "miniobj_splitter_bank", label: "Mini-Object Splitter Bank", tier: "core", weight: 0.24, description: "Distributed splitter/output bank" },
+    { id: "salience_allocator", label: "Salience Allocator", tier: "core", weight: 0.24, description: "Core/sub/detail resource budget allocator" },
+    { id: "squad_router", label: "Squad Router", tier: "sub", weight: 0.2, description: "4-bristle squad switching and fanout" },
+    { id: "bristle_router", label: "Bristle Router", tier: "sub", weight: 0.2, description: "Fine-grain bristle endpoint control" },
+    { id: "interstitial_coupler", label: "Interstitial Coupler", tier: "sub", weight: 0.2, description: "Gap-coupled adjacent port handoff" },
+    { id: "substrate_bias_controller", label: "Substrate Bias Controller", tier: "sub", weight: 0.2, description: "Local bias actuation for regional routing" },
+    { id: "reflective_projector_bus", label: "Projector Mirror Bus", tier: "sub", weight: 0.2, description: "Mini-object beam projection mirror plane" },
+    { id: "fps_frame_store", label: "FPS Frame Store", tier: "detail", weight: 0.34, description: "Frame sample storage/retrieval" },
+    { id: "native_qos_scheduler", label: "Native QoS Scheduler", tier: "detail", weight: 0.33, description: "Priority shaping across target modes" },
+    { id: "jitter_damper", label: "Jitter Damper", tier: "detail", weight: 0.33, description: "Stability policy for smooth directional control" },
+  ],
+}
+
+function tierBudgetsForSimulation(simulationId: RotaryArchitectureSimulationId) {
+  if (simulationId === "isp_3d_hybrid_reference") {
+    return { core: 0.64, sub: 0.24, detail: 0.12 }
+  }
+  return { core: 0.56, sub: 0.3, detail: 0.14 }
+}
+
+function simulationMetadata(simulationId: RotaryArchitectureSimulationId) {
+  if (simulationId === "isp_3d_hybrid_reference") {
+    return {
+      title: "3D-Stacked ISP Hybrid Projection",
+      problem: "ISP memory wall dominated by expensive off-chip DRAM dynamic power and large footprint demands.",
+      reasoning:
+        "Projects a reference 3D-SRAM/3D-DRAM hybrid hierarchy where core salience is concentrated on local stacked memory and hybrid arbitration.",
+    }
+  }
+  return {
+    title: "Native Rotary Waveguide Projection",
+    problem: "Need a memoryless, encoder-driven routing architecture that remains stable while allocating directional resources.",
+    reasoning:
+      "Projects native splitter/beamforming architecture where mini objects act as addressable routing endpoints and bias actuators for bristle/squad/band control.",
+  }
+}
+
 function normalizeMetric(values: number[]) {
   if (values.length === 0) return []
   let min = Number.POSITIVE_INFINITY
@@ -320,6 +403,100 @@ export function computeRotaryEncoderFrame(params: RotaryEncoderParams): RotaryEn
       bySquadMiniObjId,
       byBristleMiniObjId,
     },
+  }
+}
+
+export function simulateRotaryArchitecture(
+  frame: RotaryEncoderFrame,
+  simulationId: RotaryArchitectureSimulationId
+): RotaryArchitectureSimulation {
+  const templates = ROTARY_ARCHITECTURE_TEMPLATE_LIBRARY[simulationId]
+  const budgets = tierBudgetsForSimulation(simulationId)
+  const meta = simulationMetadata(simulationId)
+  const miniObjectCount = Math.max(1, frame.miniObjectSalience.length || 1)
+  const bandIndicesByPort = Array.from({ length: miniObjectCount }, () => [] as number[])
+  const bristleIdsByPort = Array.from({ length: miniObjectCount }, () => [] as number[])
+  for (const snapshot of frame.bandSnapshots) {
+    const port = snapshot.miniObjId % miniObjectCount
+    bandIndicesByPort[port].push(snapshot.bandIndex)
+    if (!bristleIdsByPort[port].includes(snapshot.anchorBristleId)) {
+      bristleIdsByPort[port].push(snapshot.anchorBristleId)
+    }
+  }
+
+  const tierTotals: Record<RotaryArchitectureTier, number> = { core: 0, sub: 0, detail: 0 }
+  for (const template of templates) {
+    tierTotals[template.tier] += template.weight
+  }
+
+  const budgetByTier: Record<RotaryArchitectureTier, number> = {
+    core: budgets.core,
+    sub: budgets.sub,
+    detail: budgets.detail,
+  }
+
+  const nodesDraft = templates.map((template) => {
+    const tierTotal = Math.max(1e-9, tierTotals[template.tier])
+    const salience = budgetByTier[template.tier] * (template.weight / tierTotal)
+    return {
+      ...template,
+      salience,
+      miniObjId: 0,
+      bandIndices: [] as number[],
+      bristleIds: [] as number[],
+    }
+  })
+
+  const portRemaining = (frame.miniObjectSalience.length > 0 ? frame.miniObjectSalience : [1]).map(
+    (value) => Math.max(0.08, value)
+  )
+  const nodesSorted = [...nodesDraft].sort((a, b) => b.salience - a.salience)
+  for (const node of nodesSorted) {
+    let bestPort = 0
+    let bestRemaining = Number.NEGATIVE_INFINITY
+    for (let port = 0; port < portRemaining.length; port += 1) {
+      if (portRemaining[port] > bestRemaining) {
+        bestRemaining = portRemaining[port]
+        bestPort = port
+      }
+    }
+    node.miniObjId = bestPort
+    portRemaining[bestPort] -= node.salience * 0.85
+  }
+
+  for (let port = 0; port < miniObjectCount; port += 1) {
+    const nodesOnPort = nodesDraft.filter((node) => node.miniObjId === port)
+    if (nodesOnPort.length === 0) continue
+    const totalWeight = nodesOnPort.reduce((sum, node) => sum + node.salience, 0)
+    const bandList = bandIndicesByPort[port]
+    const bristleList = bristleIdsByPort[port]
+    let bandCursor = 0
+    let bristleCursor = 0
+    for (let i = 0; i < nodesOnPort.length; i += 1) {
+      const node = nodesOnPort[i]
+      const fraction = totalWeight > 1e-9 ? node.salience / totalWeight : 1 / nodesOnPort.length
+      const bandTake =
+        i === nodesOnPort.length - 1
+          ? Math.max(0, bandList.length - bandCursor)
+          : Math.max(1, Math.round(bandList.length * fraction))
+      const bristleTake =
+        i === nodesOnPort.length - 1
+          ? Math.max(0, bristleList.length - bristleCursor)
+          : Math.max(1, Math.round(bristleList.length * fraction))
+      node.bandIndices = bandList.slice(bandCursor, bandCursor + bandTake)
+      node.bristleIds = bristleList.slice(bristleCursor, bristleCursor + bristleTake)
+      bandCursor += bandTake
+      bristleCursor += bristleTake
+    }
+  }
+
+  return {
+    id: simulationId,
+    title: meta.title,
+    problem: meta.problem,
+    reasoning: meta.reasoning,
+    budgets,
+    nodes: nodesDraft,
   }
 }
 
