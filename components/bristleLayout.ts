@@ -12,6 +12,76 @@ export interface BristleSpec {
   sequentialIndex: number
 }
 
+export const TAU = Math.PI * 2
+
+export function canonTheta(theta: number) {
+  return ((theta % TAU) + TAU) % TAU
+}
+
+export interface BristleMeta {
+  id: number
+  ringIndex: number
+  theta: number
+  tensolId: number
+  tensolSlot: 0 | 1 | 2 | 3
+  prev: number
+  next: number
+}
+
+export interface BristleMetaContext {
+  ordered: BristleMeta[]
+  byId: Map<number, BristleMeta>
+  idByRingIndex: number[]
+  ringIndexById: Map<number, number>
+  tensolMembersById: Map<number, number[]>
+}
+
+export function buildBristleMeta(
+  bristles: BristleSpec[],
+  tensolSize = 4
+): BristleMetaContext {
+  const sorted = bristles
+    .map((b) => ({ id: b.index, theta: canonTheta(b.angle) }))
+    .sort((a, b) => a.theta - b.theta)
+
+  const ordered: BristleMeta[] = []
+  const byId = new Map<number, BristleMeta>()
+  const idByRingIndex: number[] = []
+  const ringIndexById = new Map<number, number>()
+  const tensolMembersById = new Map<number, number[]>()
+
+  const total = sorted.length
+  for (let ringIndex = 0; ringIndex < total; ringIndex += 1) {
+    const source = sorted[ringIndex]
+    const tensolId = Math.floor(ringIndex / tensolSize)
+    const tensolSlot = (ringIndex % tensolSize) as 0 | 1 | 2 | 3
+    const meta: BristleMeta = {
+      id: source.id,
+      ringIndex,
+      theta: source.theta,
+      tensolId,
+      tensolSlot,
+      prev: (ringIndex - 1 + total) % total,
+      next: (ringIndex + 1) % total,
+    }
+    ordered.push(meta)
+    byId.set(meta.id, meta)
+    idByRingIndex[ringIndex] = meta.id
+    ringIndexById.set(meta.id, ringIndex)
+    const members = tensolMembersById.get(tensolId) ?? []
+    members.push(meta.id)
+    tensolMembersById.set(tensolId, members)
+  }
+
+  return {
+    ordered,
+    byId,
+    idByRingIndex,
+    ringIndexById,
+    tensolMembersById,
+  }
+}
+
 export function createWaveguideBristles(): BristleSpec[] {
   const beamArray: BristleSpec[] = []
   const rows = 16

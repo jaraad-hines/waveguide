@@ -1,11 +1,11 @@
 "use client"
 
-import { useMemo, useRef, useState, useEffect, Suspense, type CSSProperties } from "react"
+import { memo, useMemo, useRef, useState, useEffect, Suspense, type CSSProperties } from "react"
 import { useFrame, useThree } from "@react-three/fiber"
 import { Html } from "@react-three/drei"
 import * as THREE from "three"
 import { Menu, Grid2X2, Gauge, Link2, FileText } from "lucide-react"
-import { BristleSpec } from "./bristleLayout"
+import { BristleSpec, buildBristleMeta, canonTheta } from "./bristleLayout"
 import WaveguideField from "./waveguide_field"
 import WindowPlayer from "./WindowPlayer"
 import PlasticityLinkPanel from "./PlasticityLinkPanel"
@@ -16,6 +16,7 @@ import { TensorService } from "../services/tensorService"
 import { TensorContent } from "../types/tensor"
 import { extractMusicMetadata, validateMusicFile } from "../services/musicFileUtils"
 import { extractPlaylistId } from "../services/youtubeApi"
+import { computeRotaryEncoderFrame, createRotaryFrameStore } from "../utils/rotaryEncoder"
 
 // Grip mode types
 export type GripMode = "orbit_scan" | "meridian_dive" | "helical_descent" | "event_lensing" | "tensol_jump"
@@ -62,22 +63,56 @@ const PLAYLIST_MAX_INDEX = 200
 const QUADRANT_OUTER_RADIUS_FACTOR = 0.995
 const QUADRANT_INNER_CLEARANCE = 1
 const SUBSTRATE_RING_LEVELS = [0.28, 0.48, 0.72]
-const CYLINDER_RING_TARGET_COUNT = 16
+const CYLINDER_RING_TARGET_COUNT = 32
+const FPS_THETA_BAND_COUNT = 32
+const MINI_OBJECT_COUNT = 6
 const PLASTIC_THETA_BINS = 256
 const PLASTIC_R_BINS = 8
 const BRISTLES_PER_QUADRANT = 4
 const TWO_PI = Math.PI * 2
 const DOME_CAP_ZERO_Y = 0
 const DOME_RIM_OVERFILL_SCALE = 1.42
+const RIM_RING_PLANE_OFFSET_FACTOR = 1.6
+const RIM_RING_INVERT_X = Math.PI
+const ENABLE_SCENE_IDLE_SPIN = false
+const CAMERA_LERP_GAIN = 2
+const CAMERA_SNAP_EPS = 0.0006
+const SALIENCE_UI_COMMIT_INTERVAL_SEC = 0.75
 const LOG_STORAGE_ACTIVE_SESSION_KEY = "plasticity_active_session_id"
 const LOG_STORAGE_PREFIX = "plasticity_logs_"
 const LOG_PERSIST_INTERVAL_SEC = 1
 const LOG_API_FLUSH_INTERVAL_SEC = 3
 
+type FpsMiniObjConfig = {
+  bgHoverDeposit: number
+  bgHoverThrottleMs: number
+  bgHoverRepeatGuardMs: number
+  bgHoverR: number
+  bgClickDeposit: number
+  bgClickR: number
+  bandHoverDeposit: number
+  bandHoverThrottleMs: number
+  bandClickDeposit: number
+  bandR: number
+}
+
+const FPS_MINI_OBJ_CONFIG: FpsMiniObjConfig = {
+  bgHoverDeposit: 0.06,
+  bgHoverThrottleMs: 120,
+  bgHoverRepeatGuardMs: 220,
+  bgHoverR: 1.0,
+  bgClickDeposit: 0.5,
+  bgClickR: 1.0,
+  bandHoverDeposit: 0.09,
+  bandHoverThrottleMs: 80,
+  bandClickDeposit: 0.9,
+  bandR: 0.88,
+}
+
 type SceneRegime = "orbit" | "dock"
 type SceneId = "A_waveguide" | "B_grid"
 type InteractionType = "enter" | "leave" | "click" | "doubleClick" | "dwell" | "fixation"
-type HitTarget = "bristle" | "quadrant" | "surfaceCell" | "background"
+type HitTarget = "bristle" | "quadrant" | "surfaceCell" | "background" | "cylinderTarget" | "thetaBand"
 
 type InteractionEventLog = {
   t: number
@@ -155,7 +190,31 @@ type SceneTransitionLog = {
   quadrantId?: number
 }
 
-type PlasticLogEntry = InteractionEventLog | PlasticDepositLog | FieldStateLog | SceneTransitionLog | QuadrantSummaryLog
+type ThetaBandSummaryLog = {
+  t: number
+  sessionId: string
+  sceneId: SceneId
+  mode: GripMode
+  bandCount: number
+  high: number
+  medium: number
+  low: number
+  band_count_high: number
+  band_count_medium: number
+  band_count_low: number
+  squad_count_high: number
+  squad_count_medium: number
+  squad_count_low: number
+  miniObjSalience: number[]
+}
+
+type PlasticLogEntry =
+  | InteractionEventLog
+  | PlasticDepositLog
+  | FieldStateLog
+  | SceneTransitionLog
+  | QuadrantSummaryLog
+  | ThetaBandSummaryLog
 
 type QuadrantSubstrateTarget = {
   quadrantId: number
@@ -165,6 +224,39 @@ type QuadrantSubstrateTarget = {
   substrateRNorm: number
   meshTag: string
   worldPosition: THREE.Vector3
+  worldQuaternion: THREE.Quaternion
+}
+
+type QuadrantInterstitialTarget = {
+  leftQuadrantId: number
+  rightQuadrantId: number
+  thetaCenter: number
+  meshTag: string
+  worldPosition: THREE.Vector3
+  worldQuaternion: THREE.Quaternion
+}
+
+type SalienceLevel = "low" | "medium" | "high"
+
+type ThetaBandSnapshot = {
+  bandIndex: number
+  thetaStart: number
+  thetaEnd: number
+  thetaCenter: number
+  score: number
+  level: SalienceLevel
+  miniObjId: number
+  quadrantId: number
+  squadId: number
+  anchorBristleId: number
+}
+
+type SquadSalienceSnapshot = {
+  squadId: number
+  score: number
+  level: SalienceLevel
+  miniObjId: number
+  anchorBristleId: number
 }
 
 const KERNEL_3X3 = [
@@ -174,7 +266,7 @@ const KERNEL_3X3 = [
 ]
 
 function normAngle(angle: number) {
-  return ((angle % TWO_PI) + TWO_PI) % TWO_PI
+  return canonTheta(angle)
 }
 
 function thetaToBin(theta: number) {
@@ -331,6 +423,81 @@ function CircularImageOverlay({ centerPosition, imagePath }: { centerPosition: T
   )
 }
 
+function thetaFromPoint(x: number, z: number) {
+  return normAngle(Math.atan2(z, x))
+}
+
+function salienceToSubstrateIndex(score: number) {
+  if (score >= 0.66) return 2
+  if (score >= 0.33) return 1
+  return 0
+}
+
+function normalizeMetric(values: number[]) {
+  if (values.length === 0) return []
+  let min = Number.POSITIVE_INFINITY
+  let max = Number.NEGATIVE_INFINITY
+  for (const value of values) {
+    if (value < min) min = value
+    if (value > max) max = value
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max - min < 1e-9) {
+    return values.map(() => 0)
+  }
+  const range = max - min
+  return values.map((value) => (value - min) / range)
+}
+
+function classifyPercentiles(scores: number[]) {
+  const levels: SalienceLevel[] = Array.from({ length: scores.length }, () => "low")
+  const n = scores.length
+  if (n === 0) return { levels, counts: { high: 0, medium: 0, low: 0 } }
+
+  const highCountTarget = Math.ceil(n * 0.15)
+  const mediumCountTarget = Math.ceil(n * 0.25)
+  const ranked = scores
+    .map((score, index) => ({ score, index }))
+    .sort((a, b) => (b.score !== a.score ? b.score - a.score : a.index - b.index))
+
+  for (let i = 0; i < ranked.length; i += 1) {
+    const { index } = ranked[i]
+    if (i < highCountTarget) {
+      levels[index] = "high"
+    } else if (i < highCountTarget + mediumCountTarget) {
+      levels[index] = "medium"
+    } else {
+      levels[index] = "low"
+    }
+  }
+
+  return {
+    levels,
+    counts: {
+      high: highCountTarget,
+      medium: Math.min(mediumCountTarget, Math.max(0, n - highCountTarget)),
+      low: Math.max(0, n - highCountTarget - mediumCountTarget),
+    },
+  }
+}
+
+type MutableRef<T> = { current: T }
+
+type CylinderRigProps = {
+  imagePath: string
+  yOffset: number
+  rotatorYOffset: number
+  rigScale: number
+  tetherRadius: number
+  tetherGap: number
+  ringTargetCount: number
+  thetaBandSnapshotsRef: MutableRef<ThetaBandSnapshot[]>
+  miniObjSalienceRef: MutableRef<number[]>
+  activeBandIndexRef: MutableRef<number | null>
+  onRingTargetEnterRef: MutableRef<(bandIndex: number, event: any) => void>
+  onRingTargetClickRef: MutableRef<(bandIndex: number, event: any) => void>
+  onRingTargetLeaveRef: MutableRef<(bandIndex: number, event: any) => void>
+}
+
 function CylinderRig({
   imagePath,
   yOffset,
@@ -339,20 +506,62 @@ function CylinderRig({
   tetherRadius,
   tetherGap,
   ringTargetCount,
-}: {
-  imagePath: string
-  yOffset: number
-  rotatorYOffset: number
-  rigScale: number
-  tetherRadius: number
-  tetherGap: number
-  ringTargetCount: number
-}) {
+  thetaBandSnapshotsRef,
+  miniObjSalienceRef,
+  activeBandIndexRef,
+  onRingTargetEnterRef,
+  onRingTargetClickRef,
+  onRingTargetLeaveRef,
+}: CylinderRigProps) {
   const rotatorRef = useRef<THREE.Group>(null)
+  const coreMeshRefs = useRef<Array<THREE.Mesh | null>>([])
+  const coreMaterialRefs = useRef<Array<THREE.MeshBasicMaterial | null>>([])
+  const glowMaterialRefs = useRef<Array<THREE.MeshBasicMaterial | null>>([])
+  const tetherPositions = useMemo(
+    () =>
+      Array.from({ length: MINI_OBJECT_COUNT }, (_, index) => {
+        const angle = (index / MINI_OBJECT_COUNT) * TWO_PI
+        return [Math.cos(angle) * tetherRadius, yOffset + tetherGap * 0.5, Math.sin(angle) * tetherRadius] as [number, number, number]
+      }),
+    [tetherRadius, yOffset, tetherGap]
+  )
+  const ringTargetPositions = useMemo(
+    () =>
+      Array.from({ length: ringTargetCount }, (_, index) => {
+        const angle = (index / ringTargetCount) * TWO_PI
+        return [Math.cos(angle) * tetherRadius, 0, Math.sin(angle) * tetherRadius] as [number, number, number]
+      }),
+    [ringTargetCount, tetherRadius]
+  )
 
   useFrame((_, delta) => {
     if (rotatorRef.current) {
       rotatorRef.current.rotation.y += delta * 0.24
+    }
+    const snapshots = thetaBandSnapshotsRef.current
+    const salience = miniObjSalienceRef.current
+    const activeBandIndex = activeBandIndexRef.current
+    for (let index = 0; index < ringTargetCount; index += 1) {
+      const snapshot = snapshots[index]
+      const miniObjId = snapshot?.miniObjId ?? (index % MINI_OBJECT_COUNT)
+      const salienceValue = salience[miniObjId] ?? (1 / MINI_OBJECT_COUNT)
+      const highlight = snapshot?.level === "high"
+      const isActive = activeBandIndex === index
+      const coreMaterial = coreMaterialRefs.current[index]
+      if (coreMaterial) {
+        coreMaterial.color.setRGB(highlight ? 1.0 : 0.95, highlight ? 0.48 : 0.9, highlight ? 0.32 : 0.86)
+        coreMaterial.opacity = highlight ? 0.95 : 0.76
+      }
+      const coreMesh = coreMeshRefs.current[index]
+      if (coreMesh) {
+        const gain = highlight ? 1.35 : 1
+        coreMesh.scale.set(gain, gain, gain)
+      }
+      const glowMaterial = glowMaterialRefs.current[index]
+      if (glowMaterial) {
+        glowMaterial.color.setRGB(isActive ? 1.0 : 0.98, isActive ? 0.45 : 0.92, isActive ? 0.26 : 0.86)
+        glowMaterial.opacity = 0.1 + salienceValue * 0.45 + (isActive ? 0.28 : 0)
+      }
     }
   })
 
@@ -364,12 +573,9 @@ function CylinderRig({
         </Suspense>
       </group>
 
-      {[0, 1, 2, 3, 4, 5].map((index) => {
-        const angle = (index / 6) * Math.PI * 2
-        const x = Math.cos(angle) * tetherRadius
-        const z = Math.sin(angle) * tetherRadius
+      {tetherPositions.map((position, index) => {
         return (
-          <mesh key={`cyl-rig-tether-${index}`} position={[x, yOffset + tetherGap * 0.5, z]}>
+          <mesh key={`cyl-rig-tether-${index}`} position={position}>
             <cylinderGeometry args={[0.045, 0.045, tetherGap, 10]} />
             <meshBasicMaterial
               color={new THREE.Color(0.88, 0.83, 0.78)}
@@ -399,19 +605,23 @@ function CylinderRig({
             side={THREE.DoubleSide}
           />
         </mesh>
-        {Array.from({ length: ringTargetCount }).map((_, index) => {
-          const angle = (index / ringTargetCount) * Math.PI * 2
-          const x = Math.cos(angle) * tetherRadius
-          const z = Math.sin(angle) * tetherRadius
-          const highlight = index % 4 === 0
+        {ringTargetPositions.map((position, index) => {
           return (
-            <group key={`cyl-ring-target-${index}`} position={[x, 0, z]}>
-              <mesh position={[0, 0.055, 0]}>
-                <sphereGeometry args={[highlight ? 0.07 : 0.05, 10, 10]} />
+            <group key={`cyl-ring-target-${index}`} position={position}>
+              <mesh
+                position={[0, 0.055, 0]}
+                ref={(mesh) => {
+                  coreMeshRefs.current[index] = mesh
+                }}
+              >
+                <sphereGeometry args={[0.05, 10, 10]} />
                 <meshBasicMaterial
-                  color={highlight ? new THREE.Color(1.0, 0.48, 0.32) : new THREE.Color(0.95, 0.9, 0.86)}
+                  ref={(material) => {
+                    coreMaterialRefs.current[index] = material
+                  }}
+                  color={new THREE.Color(0.95, 0.9, 0.86)}
                   transparent
-                  opacity={highlight ? 0.95 : 0.76}
+                  opacity={0.76}
                 />
               </mesh>
               <mesh position={[0, -0.005, 0]}>
@@ -422,6 +632,25 @@ function CylinderRig({
                   opacity={0.45}
                 />
               </mesh>
+              {/* Interactive overlay: sits on top of display-only target markers. */}
+              <mesh
+                position={[0, 0.13, 0]}
+                onPointerEnter={(event) => onRingTargetEnterRef.current(index, event)}
+                onPointerLeave={(event) => onRingTargetLeaveRef.current(index, event)}
+                onClick={(event) => onRingTargetClickRef.current(index, event)}
+              >
+                <sphereGeometry args={[0.12, 14, 14]} />
+                <meshBasicMaterial
+                  ref={(material) => {
+                    glowMaterialRefs.current[index] = material
+                  }}
+                  color={new THREE.Color(0.98, 0.92, 0.86)}
+                  transparent
+                  opacity={0.2}
+                  side={THREE.DoubleSide}
+                  depthWrite={false}
+                />
+              </mesh>
             </group>
           )
         })}
@@ -429,6 +658,18 @@ function CylinderRig({
     </group>
   )
 }
+
+const MemoCylinderRig = memo(
+  CylinderRig,
+  (prev, next) =>
+    prev.imagePath === next.imagePath &&
+    prev.yOffset === next.yOffset &&
+    prev.rotatorYOffset === next.rotatorYOffset &&
+    prev.rigScale === next.rigScale &&
+    prev.tetherRadius === next.tetherRadius &&
+    prev.tetherGap === next.tetherGap &&
+    prev.ringTargetCount === next.ringTargetCount
+)
 
 function createBristleGeometry() {
   // Base cylinder of height 1; we'll scale it per bristle
@@ -823,7 +1064,10 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   const [showLogStatus, setShowLogStatus] = useState(false)
   const [playlistMode, setPlaylistMode] = useState<"fifo" | "lifo">("fifo")
   const [playlistWindowStart, setPlaylistWindowStart] = useState(0)
-  const [quadrantSubstrateIndex, setQuadrantSubstrateIndex] = useState<[number, number, number, number]>([0, 0, 0, 0])
+  const [quadrantSubstrateIndex, setQuadrantSubstrateIndex] = useState<number[]>(
+    () => Array.from({ length: MINI_OBJECT_COUNT }, () => 0)
+  )
+  const [activeThetaBandIndex, setActiveThetaBandIndex] = useState<number | null>(null)
   const [sceneRegime, setSceneRegime] = useState<SceneRegime>("orbit")
   const [dockQuadrantId, setDockQuadrantId] = useState<number | null>(null)
   const [dockSelectedBristleId, setDockSelectedBristleId] = useState<number | null>(null)
@@ -864,6 +1108,8 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   const plasticityTickAccumulatorRef = useRef(0)
   const fieldLogAccumulatorRef = useRef(0)
   const quadrantSummaryAccumulatorRef = useRef(0)
+  const thetaBandUpdateAccumulatorRef = useRef(0)
+  const thetaBandSummaryAccumulatorRef = useRef(0)
   const persistAccumulatorRef = useRef(0)
   const apiFlushAccumulatorRef = useRef(0)
   const lastPersistedCountRef = useRef(0)
@@ -874,6 +1120,32 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   const quadrantActivityRef = useRef<Map<number, { hits: number; dwellTotalMs: number; depositTotal: number }>>(new Map())
   const dwellAccumulatorRef = useRef(0)
   const lastFixationLogRef = useRef(0)
+  const backgroundHoverThrottleRef = useRef(0)
+  const bandHoverThrottleRef = useRef(0)
+  const lastBackgroundHoverBristleRef = useRef<number | null>(null)
+  const thetaBandSnapshotsRef = useRef<ThetaBandSnapshot[]>([])
+  const squadSalienceSnapshotsRef = useRef<SquadSalienceSnapshot[]>([])
+  const squadSalienceCountsRef = useRef<{ high: number; medium: number; low: number }>({
+    high: 0,
+    medium: 0,
+    low: 0,
+  })
+  const miniObjSalienceRef = useRef<number[]>(
+    Array.from({ length: MINI_OBJECT_COUNT }, () => 1 / MINI_OBJECT_COUNT)
+  )
+  const activeThetaBandIndexRef = useRef<number | null>(null)
+  const onRingTargetEnterRef = useRef<(bandIndex: number, event: any) => void>(() => {})
+  const onRingTargetClickRef = useRef<(bandIndex: number, event: any) => void>(() => {})
+  const onRingTargetLeaveRef = useRef<(bandIndex: number, event: any) => void>(() => {})
+  const salienceUiCommitAccumulatorRef = useRef(0)
+  const uiMiniSalienceRef = useRef<number[]>(Array.from({ length: MINI_OBJECT_COUNT }, () => 1 / MINI_OBJECT_COUNT))
+  const uiBandLevelSignatureRef = useRef("")
+  const logFlushStateRef = useRef(logFlushState)
+  const showLogStatusRef = useRef(showLogStatus)
+  const frameTargetRef = useRef(new THREE.Vector3())
+  const frameBasePositionRef = useRef(new THREE.Vector3())
+  const frameFinalPositionRef = useRef(new THREE.Vector3())
+  const rotaryFrameStoreRef = useRef(createRotaryFrameStore(1200))
   
   const { camera, size } = useThree()
   const [quadrantViewportMetrics, setQuadrantViewportMetrics] = useState({
@@ -981,6 +1253,7 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   }, [externalTensorServiceRef])
 
   const N_BRISTLES = bristles.length
+  const bristleMeta = useMemo(() => buildBristleMeta(bristles, BRISTLES_PER_QUADRANT), [bristles])
 
   const bristleGeometry = useMemo(() => createBristleGeometry(), [])
 
@@ -1092,13 +1365,18 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   const domeRadius = useMemo(() => R_rim * 1.05, [R_rim])
   // Cap/reference ring sits on the scene zero plane; dome + waveguide derive from this shared anchor.
   const Y_RIM = useMemo(() => DOME_CAP_ZERO_Y, [])
-  // Cylinder rig is intentionally offset opposite to dome cap anchor and kept as a self-contained assembly.
-  const CYLINDER_Y_OFFSET = useMemo(() => -domeRadius * 0.32, [domeRadius])
-  const CYLINDER_ROTATOR_GAP = useMemo(() => domeRadius * 0.12, [domeRadius])
+  const RIM_RING_Y = useMemo(
+    () => Y_RIM - domeRadius * RIM_RING_PLANE_OFFSET_FACTOR,
+    [Y_RIM, domeRadius]
+  )
+  // Keep the cylinder assembly below the waveguide field, pulled deeper into the dome gap volume.
+  const CYLINDER_Y_OFFSET = useMemo(() => -domeRadius * 0.46, [domeRadius])
+  const CYLINDER_ROTATOR_GAP = useMemo(() => domeRadius * 0.09, [domeRadius])
   const CYLINDER_ROTATOR_Y_OFFSET = useMemo(
     () => CYLINDER_Y_OFFSET + CYLINDER_ROTATOR_GAP,
     [CYLINDER_Y_OFFSET, CYLINDER_ROTATOR_GAP]
   )
+  const WAVEGUIDE_Y_OFFSET = useMemo(() => CYLINDER_Y_OFFSET - domeRadius * 0.18, [CYLINDER_Y_OFFSET, domeRadius])
   const CYLINDER_TETHER_RADIUS = useMemo(() => domeRadius * 0.34, [domeRadius])
   const CYLINDER_RIG_SCALE = useMemo(() => 0.34, [])
   const domeCenterY = useMemo(() => Y_RIM - domeRadius * 0.8, [Y_RIM, domeRadius])
@@ -1188,7 +1466,7 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
         const theta = (i / N_BRISTLES) * Math.PI * 2
         const x = R_rim * Math.cos(theta)
         const z = R_rim * Math.sin(theta)
-        const position = new THREE.Vector3(x, Y_RIM, z)
+        const position = new THREE.Vector3(x, RIM_RING_Y, z)
 
         // Direction from strip to center
         const dir = new THREE.Vector3(0, 0, 0).sub(position).normalize()
@@ -1233,24 +1511,28 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
           color,
         }
       }),
-    [bristles, N_BRISTLES, R_rim, Y_RIM, bristleMetrics, palette],
+    [bristles, N_BRISTLES, R_rim, RIM_RING_Y, bristleMetrics, palette],
   )
 
   const getQuadrantIdForBristle = (bristleId: number) => {
-    return Math.floor(Math.max(0, Math.min(N_BRISTLES - 1, bristleId)) / BRISTLES_PER_QUADRANT)
+    return bristleMeta.byId.get(bristleId)?.tensolId ?? 0
   }
 
   const getQuadrantBristles = (quadrantId: number): [number, number, number, number] => {
-    const clamped = Math.max(0, quadrantId)
-    const start = clamped * BRISTLES_PER_QUADRANT
-    const ids = [start, start + 1, start + 2, start + 3].map((id) =>
-      Math.max(0, Math.min(N_BRISTLES - 1, id))
-    ) as [number, number, number, number]
-    return ids
+    const members = bristleMeta.tensolMembersById.get(Math.max(0, quadrantId)) ?? []
+    const fallback = bristleMeta.idByRingIndex[0] ?? 0
+    const padded = [
+      members[0] ?? fallback,
+      members[1] ?? members[0] ?? fallback,
+      members[2] ?? members[1] ?? members[0] ?? fallback,
+      members[3] ?? members[2] ?? members[1] ?? members[0] ?? fallback,
+    ] as [number, number, number, number]
+    return padded
   }
 
   const activeSceneId: SceneId = sceneRegime === "dock" ? "B_grid" : "A_waveguide"
-  const activeDockQuadrantId = dockQuadrantId ?? (selectedIndex !== null ? getQuadrantIdForBristle(selectedIndex) : 0)
+  const activeSelectedBristleId = selectedIndex !== null ? (bristleMeta.idByRingIndex[selectedIndex] ?? 0) : null
+  const activeDockQuadrantId = dockQuadrantId ?? (activeSelectedBristleId !== null ? getQuadrantIdForBristle(activeSelectedBristleId) : 0)
   const activeQuadrantBristles = getQuadrantBristles(activeDockQuadrantId)
 
   const centerField = fields[selectedFieldIndex]
@@ -1371,6 +1653,9 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
       flushApi: () => flushLogsToApi(true),
       getCount: () => logBufferRef.current.length,
       getSessionId: () => sessionIdRef.current,
+      getRotaryFrameCount: () => rotaryFrameStoreRef.current.count(),
+      getLatestRotaryFrame: () => rotaryFrameStoreRef.current.latest(),
+      getRotaryFrameRange: (limit = 120) => rotaryFrameStoreRef.current.range(limit),
       clearLocal: () => {
         const sessionId = sessionIdRef.current
         window.localStorage.removeItem(`${LOG_STORAGE_PREFIX}${sessionId}`)
@@ -1390,8 +1675,73 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   }, [])
 
   const getBristleTheta = (bristleId: number) => {
-    return normAngle(rimStrips[bristleId]?.theta ?? ((bristleId / Math.max(1, N_BRISTLES)) * TWO_PI))
+    const meta = bristleMeta.byId.get(bristleId)
+    if (meta) return meta.theta
+    return normAngle((bristleId / Math.max(1, N_BRISTLES)) * TWO_PI)
   }
+
+  const nearestBristleByTheta = (theta: number) => {
+    const ordered = bristleMeta.ordered
+    if (ordered.length === 0) return null
+    let low = 0
+    let high = ordered.length - 1
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2)
+      if (ordered[mid].theta < theta) low = mid + 1
+      else high = mid - 1
+    }
+
+    const wrap = (index: number) => (index + ordered.length) % ordered.length
+    const rightIndex = wrap(low)
+    const leftIndex = wrap(low - 1)
+    const right = ordered[rightIndex]
+    const left = ordered[leftIndex]
+    const circularDistance = (a: number, b: number) =>
+      Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)))
+    const pickRight = circularDistance(theta, right.theta) <= circularDistance(theta, left.theta)
+    return pickRight ? right : left
+  }
+
+  useEffect(() => {
+    const ordered = bristleMeta.ordered
+    if (ordered.length === 0) {
+      thetaBandSnapshotsRef.current = []
+      uiBandLevelSignatureRef.current = ""
+      return
+    }
+    const defaults: ThetaBandSnapshot[] = Array.from({ length: FPS_THETA_BAND_COUNT }, (_, bandIndex) => {
+      const thetaStart = (bandIndex / FPS_THETA_BAND_COUNT) * TWO_PI
+      const thetaEnd = ((bandIndex + 1) / FPS_THETA_BAND_COUNT) * TWO_PI
+      const thetaCenter = normAngle((thetaStart + thetaEnd) * 0.5)
+      const nearest = ordered[Math.floor((bandIndex / FPS_THETA_BAND_COUNT) * ordered.length)] ?? ordered[0]
+      const squadId = nearest.tensolId
+      return {
+        bandIndex,
+        thetaStart,
+        thetaEnd,
+        thetaCenter,
+        score: 0,
+        level: "low",
+        miniObjId: squadId % MINI_OBJECT_COUNT,
+        quadrantId: squadId % MINI_OBJECT_COUNT,
+        squadId,
+        anchorBristleId: nearest.id,
+      }
+    })
+    thetaBandSnapshotsRef.current = defaults
+    uiBandLevelSignatureRef.current = defaults.map((snapshot) => snapshot.level[0]).join("")
+  }, [bristleMeta])
+
+  useEffect(() => {
+    activeThetaBandIndexRef.current = activeThetaBandIndex
+  }, [activeThetaBandIndex])
+
+  useEffect(() => {
+    showLogStatusRef.current = showLogStatus
+    if (showLogStatus) {
+      setLogFlushState(logFlushStateRef.current)
+    }
+  }, [showLogStatus])
 
   const getBristleEnergy = (bristleId: number) => {
     const thetaBin = thetaToBin(getBristleTheta(bristleId))
@@ -1426,16 +1776,28 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
     }
   }
 
+  const updateLogFlushState = (next: {
+    status: "idle" | "syncing" | "ok" | "error"
+    lastAt: number | null
+    lastCount: number
+    message?: string
+  }) => {
+    logFlushStateRef.current = next
+    if (showLogStatusRef.current) {
+      setLogFlushState(next)
+    }
+  }
+
   const flushLogsToApi = async (force = false) => {
     const startIndex = force ? 0 : lastApiSyncedCountRef.current
     const pending = logBufferRef.current.slice(startIndex)
     if (pending.length === 0) return
     try {
-      setLogFlushState((prev) => ({
-        ...prev,
+      updateLogFlushState({
+        ...logFlushStateRef.current,
         status: "syncing",
         message: `Flushing ${pending.length} logs`,
-      }))
+      })
       const response = await fetch("/api/plasticity/log", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1447,14 +1809,14 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
       })
       if (response.ok) {
         lastApiSyncedCountRef.current = logBufferRef.current.length
-        setLogFlushState({
+        updateLogFlushState({
           status: "ok",
           lastAt: Date.now(),
           lastCount: pending.length,
           message: "Synced",
         })
       } else {
-        setLogFlushState({
+        updateLogFlushState({
           status: "error",
           lastAt: Date.now(),
           lastCount: 0,
@@ -1463,7 +1825,7 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
       }
     } catch (error) {
       console.warn("Failed to flush plasticity logs to API sink", error)
-      setLogFlushState({
+      updateLogFlushState({
         status: "error",
         lastAt: Date.now(),
         lastCount: 0,
@@ -1741,45 +2103,48 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   useFrame((state, delta) => {
     const t = state.clock.elapsedTime
 
-    if (groupRef.current) {
+    if (groupRef.current && ENABLE_SCENE_IDLE_SPIN) {
       // Consistent rotation speed for all modes (Event Lensing style)
       const rotationSpeed = 0.01
       groupRef.current.rotation.y += delta * rotationSpeed
     }
-    const target = sceneRegime === "dock" ? dockAnchor.center : new THREE.Vector3(0, 0, 0)
+    const target = frameTargetRef.current
+    if (sceneRegime === "dock") target.copy(dockAnchor.center)
+    else target.set(0, 0, 0)
     const baseRadius = domeRadius * 2
 
     // Base camera position from cameraMode (Up/Down view switching)
-    let basePosition: THREE.Vector3
+    const basePosition = frameBasePositionRef.current
     if (sceneRegime === "dock") {
       const cameraLift = domeRadius * 0.8
       const cameraBack = domeRadius * 0.58
       const sideOffset = dockAnchor.sideSign * domeRadius * 0.16
-      basePosition = dockAnchor.center
-        .clone()
+      basePosition
+        .copy(dockAnchor.center)
         .add(new THREE.Vector3(0, cameraLift, cameraBack))
         .add(new THREE.Vector3(sideOffset, 0, 0))
     } else if (cameraMode === "rim") {
-      basePosition = new THREE.Vector3(0, 0, baseRadius)
+      basePosition.set(0, 0, baseRadius)
     } else if (cameraMode === "top") {
-      basePosition = new THREE.Vector3(0, baseRadius, 0.001)
+      basePosition.set(0, baseRadius, 0.001)
     } else {
-      basePosition = new THREE.Vector3(0, -baseRadius, 0.001)
+      basePosition.set(0, -baseRadius, 0.001)
     }
 
     // Apply grip mode camera operators
     // All modes now use Event Lensing camera behavior as default (basePosition from cameraMode)
-    let finalPosition = basePosition.clone()
+    const finalPosition = frameFinalPositionRef.current
 
     // Event Lensing style: local zoom bubble (subtle position adjustment when active)
     // This behavior is now applied to all modes
     const lensOffset = (gripMode === "event_lensing" && lensActiveRef.current) ? 1.5 : 0
-    finalPosition = basePosition.clone().add(
-      new THREE.Vector3(0, 0, -lensOffset)
-    )
+    finalPosition.copy(basePosition).add(new THREE.Vector3(0, 0, -lensOffset))
 
     // Smoothly lerp camera to final position
-    camera.position.lerp(finalPosition, delta * 2)
+    camera.position.lerp(finalPosition, delta * CAMERA_LERP_GAIN)
+    if (camera.position.distanceToSquared(finalPosition) <= CAMERA_SNAP_EPS * CAMERA_SNAP_EPS) {
+      camera.position.copy(finalPosition)
+    }
     camera.lookAt(target)
 
     if (selectedIndex !== null && bristleGroupRef.current && centerBristleRef.current) {
@@ -1884,8 +2249,11 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
     plasticityTickAccumulatorRef.current += delta
     fieldLogAccumulatorRef.current += delta
     quadrantSummaryAccumulatorRef.current += delta
+    thetaBandUpdateAccumulatorRef.current += delta
+    thetaBandSummaryAccumulatorRef.current += delta
     persistAccumulatorRef.current += delta
     apiFlushAccumulatorRef.current += delta
+    salienceUiCommitAccumulatorRef.current += delta
 
     if (sceneRegime === "dock" && hoveredGridCell !== null) {
       const bristleId = activeQuadrantBristles[hoveredGridCell] ?? activeQuadrantBristles[0]
@@ -1919,6 +2287,73 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
       field.set(out)
     }
 
+    if (thetaBandUpdateAccumulatorRef.current >= 0.12) {
+      thetaBandUpdateAccumulatorRef.current = 0
+      const frame = computeRotaryEncoderFrame({
+        field: plasticityFieldRef.current,
+        bandCount: FPS_THETA_BAND_COUNT,
+        miniObjectCount: MINI_OBJECT_COUNT,
+        plasticThetaBins: PLASTIC_THETA_BINS,
+        plasticRBins: PLASTIC_R_BINS,
+        bristleMeta,
+      })
+      if (frame.bandSnapshots.length > 0) {
+        thetaBandSnapshotsRef.current = frame.bandSnapshots as ThetaBandSnapshot[]
+        squadSalienceSnapshotsRef.current = frame.squadSnapshots as SquadSalienceSnapshot[]
+        squadSalienceCountsRef.current = frame.squadCounts
+        miniObjSalienceRef.current = frame.miniObjectSalience
+        rotaryFrameStoreRef.current.push({
+          t: performance.now(),
+          bandCounts: frame.bandCounts,
+          squadCounts: frame.squadCounts,
+          miniObjectSalience: frame.miniObjectSalience,
+        })
+        const bandLevelSignature = frame.bandSnapshots.map((snapshot) => snapshot.level[0]).join("")
+        const bandShapeChanged = bandLevelSignature !== uiBandLevelSignatureRef.current
+        const miniChanged = frame.miniObjectSalience.some(
+          (value, index) => Math.abs(value - (uiMiniSalienceRef.current[index] ?? 0)) > 0.045
+        )
+        if (salienceUiCommitAccumulatorRef.current >= SALIENCE_UI_COMMIT_INTERVAL_SEC && (bandShapeChanged || miniChanged)) {
+          salienceUiCommitAccumulatorRef.current = 0
+          uiBandLevelSignatureRef.current = bandLevelSignature
+          uiMiniSalienceRef.current = [...frame.miniObjectSalience]
+        }
+      }
+    }
+
+    if (thetaBandSummaryAccumulatorRef.current >= 1.0) {
+      thetaBandSummaryAccumulatorRef.current = 0
+      const snapshots = thetaBandSnapshotsRef.current
+      if (snapshots.length > 0) {
+        let bandHigh = 0
+        let bandMedium = 0
+        let bandLow = 0
+        for (const snapshot of snapshots) {
+          if (snapshot.level === "high") bandHigh += 1
+          else if (snapshot.level === "medium") bandMedium += 1
+          else bandLow += 1
+        }
+        const squadCounts = squadSalienceCountsRef.current
+        appendLog({
+          t: performance.now(),
+          sessionId: sessionIdRef.current,
+          sceneId: activeSceneId,
+          mode: gripMode,
+          bandCount: snapshots.length,
+          high: bandHigh,
+          medium: bandMedium,
+          low: bandLow,
+          band_count_high: bandHigh,
+          band_count_medium: bandMedium,
+          band_count_low: bandLow,
+          squad_count_high: squadCounts.high,
+          squad_count_medium: squadCounts.medium,
+          squad_count_low: squadCounts.low,
+          miniObjSalience: miniObjSalienceRef.current,
+        })
+      }
+    }
+
     if (fieldLogAccumulatorRef.current >= 0.1) {
       fieldLogAccumulatorRef.current = 0
       let energyTotal = 0
@@ -1942,8 +2377,8 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
         sceneId: activeSceneId,
         mode: gripMode,
         focus: {
-          bristleId: dockSelectedBristleId ?? selectedIndex ?? undefined,
-          quadrantId: dockQuadrantId ?? (selectedIndex !== null ? getQuadrantIdForBristle(selectedIndex) : undefined),
+          bristleId: dockSelectedBristleId ?? activeSelectedBristleId ?? undefined,
+          quadrantId: dockQuadrantId ?? (activeSelectedBristleId !== null ? getQuadrantIdForBristle(activeSelectedBristleId) : undefined),
           theta: dockSelectedBristleId !== null ? getBristleTheta(dockSelectedBristleId) : undefined,
           r: sceneRegime === "dock" ? 0.6 : 1,
         },
@@ -2014,9 +2449,10 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   const handleBristleClick = (rimIndex: number, event: any) => {
     event.stopPropagation()
     setSelectedIndex((prev) => (prev === rimIndex ? null : rimIndex))
-    setDockSelectedBristleId(rimIndex)
-    logInteraction("click", "bristle", rimIndex, 1.0, 1.0)
-    depositToPlasticity("A_waveguide", rimIndex, 1.0, 1.0)
+    const bristleId = bristleMeta.idByRingIndex[rimIndex] ?? rimIndex
+    setDockSelectedBristleId(bristleId)
+    logInteraction("click", "bristle", bristleId, 1.0, 1.0)
+    depositToPlasticity("A_waveguide", bristleId, 1.0, 1.0)
     
     // Check if this bristle has tagged content
     const content = taggingServiceRef.current.getContentByBristle(rimIndex)
@@ -2027,14 +2463,123 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
 
   const handleBristlePointerEnter = (rimIndex: number, event: any) => {
     event.stopPropagation()
-    logInteraction("enter", "bristle", rimIndex, 0.2, 1.0)
-    depositToPlasticity("A_waveguide", rimIndex, 1.0, 0.2)
+    const bristleId = bristleMeta.idByRingIndex[rimIndex] ?? rimIndex
+    logInteraction("enter", "bristle", bristleId, 0.2, 1.0)
+    depositToPlasticity("A_waveguide", bristleId, 1.0, 0.2)
   }
 
   const handleBristlePointerLeave = (rimIndex: number, event: any) => {
     event.stopPropagation()
-    logInteraction("leave", "bristle", rimIndex, 0, 1.0)
+    const bristleId = bristleMeta.idByRingIndex[rimIndex] ?? rimIndex
+    logInteraction("leave", "bristle", bristleId, 0, 1.0)
   }
+
+  const handleScenePointerDown = (event: any) => {
+    if (sceneRegime !== "orbit") return
+    if (!event?.point) return
+    const theta = thetaFromPoint(event.point.x, event.point.z)
+    const nearest = nearestBristleByTheta(theta)
+    if (!nearest) return
+
+    const bristleId = nearest.id
+    setSelectedIndex(nearest.ringIndex)
+    setDockSelectedBristleId(bristleId)
+    logInteraction("click", "background", bristleId, FPS_MINI_OBJ_CONFIG.bgClickDeposit, FPS_MINI_OBJ_CONFIG.bgClickR)
+    depositToPlasticity("A_waveguide", bristleId, FPS_MINI_OBJ_CONFIG.bgClickR, FPS_MINI_OBJ_CONFIG.bgClickDeposit)
+  }
+
+  const handleScenePointerMove = (event: any) => {
+    if (sceneRegime !== "orbit") return
+    if (!event?.point) return
+
+    // Only use fallback when a bristle mesh wasn't the active hit target.
+    const firstHit = event?.intersections?.[0]?.object
+    if (firstHit?.userData?.bristleId !== undefined) return
+
+    const now = performance.now()
+    if (now - backgroundHoverThrottleRef.current < FPS_MINI_OBJ_CONFIG.bgHoverThrottleMs) return
+    backgroundHoverThrottleRef.current = now
+
+    const theta = thetaFromPoint(event.point.x, event.point.z)
+    const nearest = nearestBristleByTheta(theta)
+    if (!nearest) return
+
+    const bristleId = nearest.id
+    if (
+      lastBackgroundHoverBristleRef.current === bristleId &&
+      now - lastFixationLogRef.current < FPS_MINI_OBJ_CONFIG.bgHoverRepeatGuardMs
+    ) {
+      return
+    }
+    lastBackgroundHoverBristleRef.current = bristleId
+    lastFixationLogRef.current = now
+
+    // Soft inductive coupling: low-weight deposit, no hard selection mutation.
+    logInteraction("fixation", "background", bristleId, FPS_MINI_OBJ_CONFIG.bgHoverDeposit, FPS_MINI_OBJ_CONFIG.bgHoverR)
+    depositToPlasticity("A_waveguide", bristleId, FPS_MINI_OBJ_CONFIG.bgHoverR, FPS_MINI_OBJ_CONFIG.bgHoverDeposit)
+  }
+
+  const handleScenePointerLeave = () => {
+    lastBackgroundHoverBristleRef.current = null
+  }
+
+  const getThetaBandSnapshot = (bandIndex: number) => {
+    const snapshots = thetaBandSnapshotsRef.current
+    if (snapshots.length === 0) return null
+    const normalized = ((bandIndex % snapshots.length) + snapshots.length) % snapshots.length
+    return snapshots[normalized] ?? null
+  }
+
+  const handleCylinderRingTargetEnter = (bandIndex: number, event: any) => {
+    if (sceneRegime !== "orbit") return
+    event.stopPropagation()
+    setActiveThetaBandIndex(bandIndex)
+
+    const now = performance.now()
+    if (now - bandHoverThrottleRef.current < FPS_MINI_OBJ_CONFIG.bandHoverThrottleMs) return
+    bandHoverThrottleRef.current = now
+
+    const snapshot = getThetaBandSnapshot(bandIndex)
+    if (!snapshot) return
+    const bristleId = snapshot.anchorBristleId
+    logInteraction("fixation", "thetaBand", bristleId, FPS_MINI_OBJ_CONFIG.bandHoverDeposit, FPS_MINI_OBJ_CONFIG.bandR)
+    depositToPlasticity("A_waveguide", bristleId, FPS_MINI_OBJ_CONFIG.bandR, FPS_MINI_OBJ_CONFIG.bandHoverDeposit)
+  }
+
+  const handleCylinderRingTargetLeave = (_bandIndex: number, event: any) => {
+    event.stopPropagation()
+    setActiveThetaBandIndex(null)
+  }
+
+  const handleCylinderRingTargetClick = (bandIndex: number, event: any) => {
+    if (sceneRegime !== "orbit") return
+    event.stopPropagation()
+    const snapshot = getThetaBandSnapshot(bandIndex)
+    if (!snapshot) return
+    const bristleId = snapshot.anchorBristleId
+    const bristle = bristleMeta.byId.get(bristleId)
+    setDockSelectedBristleId(bristleId)
+    if (bristle) {
+      setSelectedIndex(bristle.ringIndex)
+    }
+    setActiveThetaBandIndex(bandIndex)
+    logInteraction("click", "cylinderTarget", bristleId, FPS_MINI_OBJ_CONFIG.bandClickDeposit, FPS_MINI_OBJ_CONFIG.bandR)
+    depositToPlasticity("A_waveguide", bristleId, FPS_MINI_OBJ_CONFIG.bandR, FPS_MINI_OBJ_CONFIG.bandClickDeposit)
+
+    // Quadrant glyph toggle substrate state piping:
+    // route band salience into the corresponding mini-object/quadrant substrate level.
+    const salience = miniObjSalienceRef.current[snapshot.miniObjId] ?? (1 / MINI_OBJECT_COUNT)
+    const nextSubstrateIndex = salienceToSubstrateIndex(salience)
+    setQuadrantSubstrateIndex((prev) => {
+      const next = [...prev]
+      next[snapshot.miniObjId] = nextSubstrateIndex
+      return next
+    })
+  }
+
+  onRingTargetEnterRef.current = handleCylinderRingTargetEnter
+  onRingTargetClickRef.current = handleCylinderRingTargetClick
+  onRingTargetLeaveRef.current = handleCylinderRingTargetLeave
 
   const getCellBristleId = (cellIndex: number) => {
     return activeQuadrantBristles[Math.max(0, Math.min(3, cellIndex))] ?? activeQuadrantBristles[0]
@@ -2084,9 +2629,23 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
       event.stopPropagation()
     }
     setQuadrantSubstrateIndex((prev) => {
-      const next = [...prev] as [number, number, number, number]
+      const next = [...prev]
       const current = next[quadrantId] ?? 0
       next[quadrantId] = (current + 1) % SUBSTRATE_RING_LEVELS.length
+      return next
+    })
+  }
+
+  const handleInterstitialSubstrateToggle = (leftQuadrantId: number, rightQuadrantId: number, event?: any) => {
+    if (event?.stopPropagation) {
+      event.stopPropagation()
+    }
+    setQuadrantSubstrateIndex((prev) => {
+      const next = [...prev]
+      const leftCurrent = next[leftQuadrantId] ?? 0
+      const rightCurrent = next[rightQuadrantId] ?? 0
+      next[leftQuadrantId] = (leftCurrent + 1) % SUBSTRATE_RING_LEVELS.length
+      next[rightQuadrantId] = (rightCurrent + 1) % SUBSTRATE_RING_LEVELS.length
       return next
     })
   }
@@ -2191,33 +2750,36 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   }, [visiblePlaylistIndices, effectiveQuadrantOrientation, quadrantViewportMetrics.innerRadiusPct])
   const quadrantSubstrateTargets = useMemo<QuadrantSubstrateTarget[]>(() => {
     const orientationRotation = effectiveQuadrantOrientation === "top" ? Math.PI : 0
-    const base = [
-      { quadrantId: 0, startRad: -Math.PI * 0.5, endRad: 0 },
-      { quadrantId: 1, startRad: -Math.PI, endRad: -Math.PI * 0.5 },
-      { quadrantId: 2, startRad: Math.PI * 0.5, endRad: Math.PI },
-      { quadrantId: 3, startRad: 0, endRad: Math.PI * 0.5 },
-    ]
+    const step = TWO_PI / MINI_OBJECT_COUNT
     const radialSpan = Math.max(0.01, quadrantSectionOuterRadius - quadrantSectionInnerRadius)
-    return base.map((q) => {
-      const thetaStart = q.startRad + orientationRotation
-      const thetaEnd = q.endRad + orientationRotation
+    const surfaceNormalAxis = new THREE.Vector3(0, 0, 1)
+    const domeCenter = new THREE.Vector3(0, domeCenterY, 0)
+    return Array.from({ length: MINI_OBJECT_COUNT }, (_, quadrantId) => {
+      const startRad = -Math.PI + quadrantId * step
+      const endRad = startRad + step
+      const thetaStart = startRad + orientationRotation
+      const thetaEnd = endRad + orientationRotation
       const thetaCenter = (thetaStart + thetaEnd) * 0.5
-      const substrateIndex = quadrantSubstrateIndex[q.quadrantId] ?? 0
+      const substrateIndex = quadrantSubstrateIndex[quadrantId] ?? 0
       const substrateRNorm = SUBSTRATE_RING_LEVELS[substrateIndex] ?? SUBSTRATE_RING_LEVELS[0]
-      const radius = quadrantSectionInnerRadius + radialSpan * substrateRNorm
+      const radius = Math.min(domeRadius - 0.01, quadrantSectionInnerRadius + radialSpan * substrateRNorm)
+      const surfaceY = domeCenterY + Math.sqrt(Math.max(0, domeRadius * domeRadius - radius * radius))
       const worldPosition = new THREE.Vector3(
         Math.cos(thetaCenter) * radius,
-        quadrantPlaneY + 0.06,
+        surfaceY + 0.02,
         Math.sin(thetaCenter) * radius,
       )
+      const normal = worldPosition.clone().sub(domeCenter).normalize()
+      const worldQuaternion = new THREE.Quaternion().setFromUnitVectors(surfaceNormalAxis, normal)
       return {
-        quadrantId: q.quadrantId,
+        quadrantId,
         thetaRange: [thetaStart, thetaEnd],
         thetaCenter,
         substrateIndex,
         substrateRNorm,
-        meshTag: `quadrant-substrate-q${q.quadrantId}`,
+        meshTag: `quadrant-substrate-q${quadrantId}`,
         worldPosition,
+        worldQuaternion,
       }
     })
   }, [
@@ -2226,7 +2788,37 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
     quadrantSectionInnerRadius,
     quadrantSectionOuterRadius,
     quadrantPlaneY,
+    domeCenterY,
+    domeRadius,
   ])
+  const quadrantInterstitialTargets = useMemo<QuadrantInterstitialTarget[]>(() => {
+    const orientationRotation = effectiveQuadrantOrientation === "top" ? Math.PI : 0
+    const step = TWO_PI / MINI_OBJECT_COUNT
+    const radius = Math.min(domeRadius - 0.005, quadrantSectionOuterRadius - 0.01)
+    const surfaceY = domeCenterY + Math.sqrt(Math.max(0, domeRadius * domeRadius - radius * radius))
+    const surfaceNormalAxis = new THREE.Vector3(0, 0, 1)
+    const domeCenter = new THREE.Vector3(0, domeCenterY, 0)
+    return Array.from({ length: MINI_OBJECT_COUNT }, (_, index) => {
+      const leftQuadrantId = index
+      const rightQuadrantId = (index + 1) % MINI_OBJECT_COUNT
+      const thetaCenter = -Math.PI + (index + 1) * step + orientationRotation
+      const worldPosition = new THREE.Vector3(
+        Math.cos(thetaCenter) * radius,
+        surfaceY + 0.022,
+        Math.sin(thetaCenter) * radius,
+      )
+      const normal = worldPosition.clone().sub(domeCenter).normalize()
+      const worldQuaternion = new THREE.Quaternion().setFromUnitVectors(surfaceNormalAxis, normal)
+      return {
+        leftQuadrantId,
+        rightQuadrantId,
+        thetaCenter,
+        meshTag: `quadrant-substrate-gap-${index}`,
+        worldPosition,
+        worldQuaternion,
+      }
+    })
+  }, [effectiveQuadrantOrientation, quadrantSectionOuterRadius, domeCenterY, domeRadius])
   const verticalDirection: 1 | -1 = cameraMode === "top" ? 1 : -1
   const isRimMiddleView = cameraMode === "rim"
   const pendingLogCount = Math.max(0, logBufferRef.current.length - lastApiSyncedCountRef.current)
@@ -2244,7 +2836,12 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
       : "never"
 
   return (
-    <group ref={groupRef}>
+    <group
+      ref={groupRef}
+      onPointerDown={handleScenePointerDown}
+      onPointerMove={handleScenePointerMove}
+      onPointerLeave={handleScenePointerLeave}
+    >
       {/* Dome hemisphere */}
       <mesh
         position={[0, domeCenterY, 0]}
@@ -2265,7 +2862,7 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
           <group
             key={s.sourceIndex}
             position={s.position}
-            rotation={[0, s.rotationY, 0]}
+            rotation={[RIM_RING_INVERT_X, s.rotationY, 0]}
             onClick={sceneRegime === "orbit" ? (e) => handleBristleClick(s.rimIndex, e) : undefined}
             onPointerEnter={sceneRegime === "orbit" ? (e) => handleBristlePointerEnter(s.rimIndex, e) : undefined}
             onPointerLeave={sceneRegime === "orbit" ? (e) => handleBristlePointerLeave(s.rimIndex, e) : undefined}
@@ -2278,6 +2875,12 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
               geometry={bristleGeometry}
               position={[0, 0.05, 0]}
               scale={[s.thicknessScale, s.lengthScale, s.thicknessScale]}
+              userData={{
+                bristleId: s.sourceIndex,
+                ringIndex: s.rimIndex,
+                theta: canonTheta(s.theta),
+                tensolId: getQuadrantIdForBristle(s.sourceIndex),
+              }}
             >
               <meshBasicMaterial color={s.color} />
             </mesh>
@@ -2288,7 +2891,7 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
       {/* Waveguide Fields - Center field, vertical/upright orientation */}
       {centerField && (
         <group position={[0, Y_RIM, 0]}>
-          <CylinderRig
+          <MemoCylinderRig
             imagePath={centerField.imagePath}
             yOffset={CYLINDER_Y_OFFSET}
             rotatorYOffset={CYLINDER_ROTATOR_Y_OFFSET}
@@ -2296,10 +2899,16 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
             tetherRadius={CYLINDER_TETHER_RADIUS}
             tetherGap={CYLINDER_ROTATOR_GAP}
             ringTargetCount={CYLINDER_RING_TARGET_COUNT}
+            thetaBandSnapshotsRef={thetaBandSnapshotsRef}
+            miniObjSalienceRef={miniObjSalienceRef}
+            activeBandIndexRef={activeThetaBandIndexRef}
+            onRingTargetEnterRef={onRingTargetEnterRef}
+            onRingTargetClickRef={onRingTargetClickRef}
+            onRingTargetLeaveRef={onRingTargetLeaveRef}
           />
           <group scale={[2, 2, 2]}>
             <WaveguideField
-              position={new THREE.Vector3(0, 0, 0)}
+              position={new THREE.Vector3(0, WAVEGUIDE_Y_OFFSET, 0)}
               colorPalette={centerField.colorPalette}
               isSelected={true}
               bristles={bristles}
@@ -2407,7 +3016,12 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
         <group
           key={target.meshTag}
           position={target.worldPosition}
-          rotation={[Math.PI * 0.5, 0, 0]}
+          quaternion={target.worldQuaternion}
+          scale={(() => {
+            const salience = miniObjSalienceRef.current[target.quadrantId] ?? (1 / MINI_OBJECT_COUNT)
+            const gain = 1 + salience * 0.28
+            return [gain, gain, 1] as [number, number, number]
+          })()}
           onClick={(event) => handleQuadrantSubstrateToggle(target.quadrantId, event)}
         >
           <mesh position={[0, 0, 0.005]} renderOrder={500}>
@@ -2415,7 +3029,7 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
             <meshBasicMaterial
               color={new THREE.Color(0.93, 0.89, 0.84)}
               transparent
-              opacity={0.85}
+              opacity={0.58 + Math.min(0.34, (miniObjSalienceRef.current[target.quadrantId] ?? (1 / MINI_OBJECT_COUNT)) * 0.44)}
               depthTest={false}
               depthWrite={false}
               side={THREE.DoubleSide}
@@ -2458,6 +3072,45 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
           })}
         </group>
       ))}
+      {quadrantInterstitialTargets.map((target) => {
+        const leftSalience = miniObjSalienceRef.current[target.leftQuadrantId] ?? (1 / MINI_OBJECT_COUNT)
+        const rightSalience = miniObjSalienceRef.current[target.rightQuadrantId] ?? (1 / MINI_OBJECT_COUNT)
+        const blendedSalience = (leftSalience + rightSalience) * 0.5
+        return (
+          <group
+            key={target.meshTag}
+            position={target.worldPosition}
+            quaternion={target.worldQuaternion}
+            scale={[1 + blendedSalience * 0.22, 1 + blendedSalience * 0.22, 1]}
+            onClick={(event) =>
+              handleInterstitialSubstrateToggle(target.leftQuadrantId, target.rightQuadrantId, event)
+            }
+          >
+            <mesh position={[0, 0, 0.005]} renderOrder={498}>
+              <ringGeometry args={[0.1, 0.2, 24]} />
+              <meshBasicMaterial
+                color={new THREE.Color(0.92, 0.87, 0.82)}
+                transparent
+                opacity={0.48 + Math.min(0.34, blendedSalience * 0.5)}
+                depthTest={false}
+                depthWrite={false}
+                side={THREE.DoubleSide}
+              />
+            </mesh>
+            <mesh position={[0, 0, 0.018]} renderOrder={499}>
+              <ringGeometry args={[0.04, 0.09, 20]} />
+              <meshBasicMaterial
+                color={new THREE.Color(1.0, 0.4, 0.24)}
+                transparent
+                opacity={0.34 + Math.min(0.46, blendedSalience * 0.56)}
+                depthTest={false}
+                depthWrite={false}
+                side={THREE.DoubleSide}
+              />
+            </mesh>
+          </group>
+        )
+      })}
 
       {showQuadrantViewport && (
         <>
@@ -2646,7 +3299,7 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
           if (sceneRegime === "dock") {
             exitDockRegime()
           } else {
-            enterDockRegime(selectedIndex ?? 0)
+            enterDockRegime(activeSelectedBristleId ?? 0)
           }
         }}
       />
