@@ -48,6 +48,7 @@ export type RotaryEncoderParams = {
   field: Float32Array
   bandCount: number
   miniObjectCount: number
+  miniObjectThetas?: number[]
   plasticThetaBins: number
   plasticRBins: number
   bristleMeta: BristleMetaContext
@@ -237,11 +238,39 @@ function nearestBristleByTheta(bristleMeta: BristleMetaContext, theta: number) {
   return circularDistance(theta, right.theta) <= circularDistance(theta, left.theta) ? right : left
 }
 
+function nearestMiniObjectByTheta(theta: number, miniObjectThetas: number[]) {
+  if (miniObjectThetas.length === 0) return -1
+  let bestIndex = 0
+  let bestDistance = Number.POSITIVE_INFINITY
+  for (let index = 0; index < miniObjectThetas.length; index += 1) {
+    const distance = Math.abs(Math.atan2(Math.sin(theta - miniObjectThetas[index]), Math.cos(theta - miniObjectThetas[index])))
+    if (distance < bestDistance) {
+      bestDistance = distance
+      bestIndex = index
+    }
+  }
+  return bestIndex
+}
+
+function resolveMiniObjectIndexByTheta(
+  theta: number,
+  miniObjectThetas: number[],
+  fallbackIndex: number,
+  miniObjectCount: number
+) {
+  if (miniObjectThetas.length > 0) {
+    const nearest = nearestMiniObjectByTheta(theta, miniObjectThetas)
+    if (nearest >= 0) return nearest
+  }
+  return ((fallbackIndex % miniObjectCount) + miniObjectCount) % miniObjectCount
+}
+
 export function computeRotaryEncoderFrame(params: RotaryEncoderParams): RotaryEncoderFrame {
   const {
     field,
     bandCount,
     miniObjectCount,
+    miniObjectThetas = [],
     plasticThetaBins,
     plasticRBins,
     bristleMeta,
@@ -263,6 +292,10 @@ export function computeRotaryEncoderFrame(params: RotaryEncoderParams): RotaryEn
       },
     }
   }
+
+  const normalizedMiniObjectThetas = miniObjectThetas
+    .slice(0, miniObjectCount)
+    .map((theta) => canonTheta(theta))
 
   const squads = Array.from(bristleMeta.tensolMembersById.entries()).sort((a, b) => a[0] - b[0])
   const squadEnergy: number[] = []
@@ -311,13 +344,23 @@ export function computeRotaryEncoderFrame(params: RotaryEncoderParams): RotaryEn
   )
 
   const squadClassification = classifyPercentiles(squadScores)
-  const squadSnapshots: RotarySquadSnapshot[] = squads.map(([squadId], index) => ({
-    squadId,
-    score: squadScores[index],
-    level: squadClassification.levels[index],
-    miniObjId: squadId % miniObjectCount,
-    anchorBristleId: squadAnchorBristles[index],
-  }))
+  const squadSnapshots: RotarySquadSnapshot[] = squads.map(([squadId], index) => {
+    const anchorTheta = bristleMeta.byId.get(squadAnchorBristles[index])?.theta ?? 0
+    const fallbackMiniObjId = squadId % miniObjectCount
+    const miniObjId = resolveMiniObjectIndexByTheta(
+      anchorTheta,
+      normalizedMiniObjectThetas,
+      fallbackMiniObjId,
+      miniObjectCount
+    )
+    return {
+      squadId,
+      score: squadScores[index],
+      level: squadClassification.levels[index],
+      miniObjId,
+      anchorBristleId: squadAnchorBristles[index],
+    }
+  })
 
   const squadById = new Map<number, RotarySquadSnapshot>()
   const bySquadMiniObjId = new Map<number, number>()
@@ -363,7 +406,13 @@ export function computeRotaryEncoderFrame(params: RotaryEncoderParams): RotaryEn
       }
     }
     if (scoreCount > 0) score /= scoreCount
-    const miniObjId = squadById.get(nearestSquadId)?.miniObjId ?? (nearestSquadId % miniObjectCount)
+    const fallbackMiniObjId = squadById.get(nearestSquadId)?.miniObjId ?? (nearestSquadId % miniObjectCount)
+    const miniObjId = resolveMiniObjectIndexByTheta(
+      thetaCenter,
+      normalizedMiniObjectThetas,
+      fallbackMiniObjId,
+      miniObjectCount
+    )
     totalScore += score
     miniTotals[miniObjId] += score
     byBandMiniObjId[bandIndex] = miniObjId

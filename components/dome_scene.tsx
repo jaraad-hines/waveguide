@@ -684,6 +684,118 @@ type ArchitectureSimulationBundle = {
 }
 
 type ArchitectureDisplayMode = "solution1" | "solution2" | "all"
+type ArchitectureFocusMode = "normal" | "delta"
+
+type ArchitectureRenderOptions = {
+  topKBeams: number
+  focusMode: ArchitectureFocusMode
+  lockDominantPort: boolean
+  showDiffOverlay: boolean
+}
+
+type ArchitectureSummary = {
+  bandHigh: number
+  bandMedium: number
+  bandLow: number
+  dominantPort: number
+  spillActive: boolean
+  policyOverride: boolean
+  confidence: number
+}
+
+type BristleGlyphPoint = {
+  x: number
+  y: number
+  z: number
+  h: number
+}
+
+function BristleTextPanel({
+  text,
+  width = 0.96,
+  height = 0.96,
+  color = new THREE.Color(0.94, 0.9, 0.86),
+}: {
+  text: string
+  width?: number
+  height?: number
+  color?: THREE.Color
+}) {
+  const geometry = useMemo(() => {
+    const geom = new THREE.CylinderGeometry(0.0038, 0.0038, 1, 6, 1)
+    geom.translate(0, 0.5, 0)
+    return geom
+  }, [])
+  const material = useMemo(
+    () =>
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.88,
+      }),
+    [color]
+  )
+  const points = useMemo<BristleGlyphPoint[]>(() => {
+    const trimmed = text.trim()
+    if (!trimmed) return []
+    const canvas = document.createElement("canvas")
+    canvas.width = 700
+    canvas.height = 460
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return []
+    ctx.fillStyle = "black"
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.fillStyle = "white"
+    ctx.textBaseline = "top"
+    ctx.font = "600 18px 'Consolas', 'Courier New', monospace"
+    const lines = text.split("\n")
+    const lineHeight = 24
+    for (let i = 0; i < lines.length; i += 1) {
+      ctx.fillText(lines[i], 16, 16 + i * lineHeight)
+    }
+    const image = ctx.getImageData(0, 0, canvas.width, canvas.height).data
+    const result: BristleGlyphPoint[] = []
+    const step = 4
+    for (let py = 0; py < canvas.height; py += step) {
+      for (let px = 0; px < canvas.width; px += step) {
+        const idx = (py * canvas.width + px) * 4
+        const alpha = image[idx + 3]
+        if (alpha < 80) continue
+        const nx = (px / canvas.width - 0.5) * width
+        const ny = (0.5 - py / canvas.height) * height
+        const jitter = (((px * 73856093) ^ (py * 19349663)) & 0xff) / 255
+        result.push({
+          x: nx,
+          y: ny,
+          z: 0.004 + jitter * 0.012,
+          h: 0.008 + jitter * 0.012,
+        })
+      }
+    }
+    if (result.length > 5200) return result.slice(0, 5200)
+    return result
+  }, [text, width, height])
+  const instRef = useRef<THREE.InstancedMesh>(null)
+  const tempObj = useMemo(() => new THREE.Object3D(), [])
+
+  useEffect(() => {
+    if (!instRef.current) return
+    for (let i = 0; i < points.length; i += 1) {
+      const point = points[i]
+      tempObj.position.set(point.x, point.y, point.z)
+      tempObj.scale.set(1, point.h, 1)
+      tempObj.rotation.set(0, 0, 0)
+      tempObj.updateMatrix()
+      instRef.current.setMatrixAt(i, tempObj.matrix)
+    }
+    instRef.current.count = points.length
+    instRef.current.instanceMatrix.needsUpdate = true
+  }, [points, tempObj])
+
+  if (points.length === 0) return null
+
+  return <instancedMesh ref={instRef} args={[geometry, material, points.length]} />
+}
 
 function tierColor(tier: "core" | "sub" | "detail") {
   if (tier === "core") return new THREE.Color(1.0, 0.54, 0.34)
@@ -694,23 +806,31 @@ function tierColor(tier: "core" | "sub" | "detail") {
 function ArchitectureProjectionSpace({
   simulationRef,
   miniObjSalienceRef,
+  thetaBandSnapshotsRef,
   displayMode,
+  renderOptions,
+  summaryRef,
   yCenter,
   layerGap,
   tetherRadius,
   miniObjectCount,
   projectorY,
   projectorRadius,
+  projectorThetas,
 }: {
   simulationRef: MutableRef<ArchitectureSimulationBundle>
   miniObjSalienceRef: MutableRef<number[]>
+  thetaBandSnapshotsRef: MutableRef<ThetaBandSnapshot[]>
   displayMode: ArchitectureDisplayMode
+  renderOptions: ArchitectureRenderOptions
+  summaryRef: MutableRef<ArchitectureSummary>
   yCenter: number
   layerGap: number
   tetherRadius: number
   miniObjectCount: number
   projectorY: number
   projectorRadius: number
+  projectorThetas?: number[]
 }) {
   const nodeMeshRefs = useRef<Record<string, THREE.Mesh | null>>({})
   const nodeMaterialRefs = useRef<Record<string, THREE.MeshBasicMaterial | null>>({})
@@ -718,9 +838,38 @@ function ArchitectureProjectionSpace({
   const beamMaterialRefs = useRef<Record<string, THREE.MeshBasicMaterial | null>>({})
   const projectorMeshRefs = useRef<Array<THREE.Mesh | null>>([])
   const projectorMaterialRefs = useRef<Array<THREE.MeshBasicMaterial | null>>([])
+  const diffBeamMeshRefs = useRef<Array<THREE.Mesh | null>>([])
+  const diffBeamMaterialRefs = useRef<Array<THREE.MeshBasicMaterial | null>>([])
   const upAxisRef = useRef(new THREE.Vector3(0, 1, 0))
   const dirRef = useRef(new THREE.Vector3())
   const midRef = useRef(new THREE.Vector3())
+  const nodeHistoryRef = useRef<Map<string, Array<{ t: number; v: number }>>>(new Map())
+  const summaryCommitAccumulatorRef = useRef(0)
+  const [summaryUi, setSummaryUi] = useState<ArchitectureSummary>({
+    bandHigh: 0,
+    bandMedium: 0,
+    bandLow: 0,
+    dominantPort: 0,
+    spillActive: false,
+    policyOverride: false,
+    confidence: 0.5,
+  })
+
+  const modePalette = useMemo(
+    () => ({
+      solution1: {
+        core: new THREE.Color(0.99, 0.52, 0.22),
+        sub: new THREE.Color(1.0, 0.78, 0.34),
+        detail: new THREE.Color(0.98, 0.92, 0.64),
+      },
+      solution2: {
+        core: new THREE.Color(0.3, 0.78, 1.0),
+        sub: new THREE.Color(0.22, 0.56, 0.95),
+        detail: new THREE.Color(0.58, 0.88, 1.0),
+      },
+    }),
+    []
+  )
 
   const profileSpecs = useMemo(() => {
     const allSpecs = [
@@ -757,14 +906,14 @@ function ArchitectureProjectionSpace({
   const projectorPositions = useMemo(
     () =>
       Array.from({ length: miniObjectCount }, (_, index) => {
-        const angle = (index / miniObjectCount) * TWO_PI
+        const angle = projectorThetas?.[index] ?? ((index / miniObjectCount) * TWO_PI)
         return new THREE.Vector3(
           Math.cos(angle) * projectorRadius,
           projectorY,
           Math.sin(angle) * projectorRadius
         )
       }),
-    [miniObjectCount, projectorRadius, projectorY]
+    [miniObjectCount, projectorRadius, projectorY, projectorThetas]
   )
 
   const nodeLayouts = useMemo(() => {
@@ -810,10 +959,98 @@ function ArchitectureProjectionSpace({
     return layouts
   }, [profileSpecs, tetherRadius, yCenter])
 
-  useFrame(() => {
+  useFrame((_, delta) => {
+    const now = performance.now()
+    const pulseHz = 4
+    const phase = ((now / 1000) * pulseHz) % 1
+    const pulseEnvelope = phase < 0.24 ? 1 : THREE.MathUtils.lerp(1, 0.36, (phase - 0.24) / 0.76)
     const simulationsByKey: Record<"reference" | "native", RotaryArchitectureSimulation | null> = {
       reference: simulationRef.current.reference,
       native: simulationRef.current.native,
+    }
+
+    const miniValues = miniObjSalienceRef.current
+    let dominantPort = 0
+    let dominantPortValue = -1
+    for (let i = 0; i < miniObjectCount; i += 1) {
+      const value = miniValues[i] ?? 0
+      if (value > dominantPortValue) {
+        dominantPortValue = value
+        dominantPort = i
+      }
+    }
+
+    type RuntimeLayout = {
+      layoutKey: string
+      profileKey: "reference" | "native"
+      profileId: RotaryArchitectureSimulationId
+      tier: "core" | "sub" | "detail"
+      nodeId: string
+      position: THREE.Vector3
+      runtimeNode: RotaryArchitectureSimulation["nodes"][number]
+      salience: number
+      delta1s: number
+    }
+    const runtimeLayouts: RuntimeLayout[] = []
+    for (const layout of nodeLayouts) {
+      const simulation = simulationsByKey[layout.profileKey]
+      const runtimeNode = simulation?.nodes.find((node) => node.id === layout.nodeId)
+      if (!runtimeNode) continue
+      const history = nodeHistoryRef.current.get(layout.key) ?? []
+      history.push({ t: now, v: runtimeNode.salience })
+      while (history.length > 0 && now - history[0].t > 1200) history.shift()
+      nodeHistoryRef.current.set(layout.key, history)
+      const baseline = history.length > 0 ? history[0].v : runtimeNode.salience
+      runtimeLayouts.push({
+        layoutKey: layout.key,
+        profileKey: layout.profileKey,
+        profileId: layout.profileId,
+        tier: layout.tier,
+        nodeId: layout.nodeId,
+        position: layout.position,
+        runtimeNode,
+        salience: runtimeNode.salience,
+        delta1s: runtimeNode.salience - baseline,
+      })
+    }
+
+    const averageAbsDelta =
+      runtimeLayouts.length > 0
+        ? runtimeLayouts.reduce((sum, entry) => sum + Math.abs(entry.delta1s), 0) / runtimeLayouts.length
+        : 0
+    const confidence = THREE.MathUtils.clamp(1 - averageAbsDelta * 5, 0.08, 0.98)
+    const bandSnapshots = thetaBandSnapshotsRef.current
+    const bandHigh = bandSnapshots.filter((snapshot) => snapshot.level === "high").length
+    const bandMedium = bandSnapshots.filter((snapshot) => snapshot.level === "medium").length
+    const bandLow = Math.max(0, bandSnapshots.length - bandHigh - bandMedium)
+    const referenceNodes = simulationsByKey.reference?.nodes ?? []
+    const nativeNodes = simulationsByKey.native?.nodes ?? []
+    const spillActive = (referenceNodes.find((node) => node.id === "lpddr_spill")?.salience ?? 0) >= 0.07
+    const policyOverride =
+      (referenceNodes.find((node) => node.id === "power_budget_gate")?.salience ?? 0) >= 0.11 ||
+      (nativeNodes.find((node) => node.id === "jitter_damper")?.salience ?? 0) >= 0.11
+    summaryRef.current = {
+      bandHigh,
+      bandMedium,
+      bandLow,
+      dominantPort,
+      spillActive,
+      policyOverride,
+      confidence,
+    }
+
+    const topKeys = new Set<string>()
+    const levelByKey = new Map<string, "high" | "medium" | "low">()
+    const byProfile: Array<"reference" | "native"> = ["reference", "native"]
+    for (const profileKey of byProfile) {
+      const profileNodes = runtimeLayouts.filter((entry) => entry.profileKey === profileKey)
+      profileNodes.sort((a, b) => b.salience - a.salience)
+      for (let i = 0; i < profileNodes.length; i += 1) {
+        if (i < Math.max(1, renderOptions.topKBeams)) topKeys.add(profileNodes[i].layoutKey)
+        const ratio = i / Math.max(1, profileNodes.length)
+        const level = ratio < 0.15 ? "high" : ratio < 0.4 ? "medium" : "low"
+        levelByKey.set(profileNodes[i].layoutKey, level)
+      }
     }
 
     for (let index = 0; index < projectorPositions.length; index += 1) {
@@ -821,11 +1058,12 @@ function ArchitectureProjectionSpace({
       const material = projectorMaterialRefs.current[index]
       if (!projector || !material) continue
       const salience = miniObjSalienceRef.current[index] ?? (1 / Math.max(1, miniObjectCount))
+      const isDominant = index === dominantPort
       projector.position.copy(projectorPositions[index])
-      const gain = 0.8 + salience * 1.6
+      const gain = (0.68 + salience * 1.8) * (isDominant ? 1.14 : 1) * (0.9 + 0.1 * pulseEnvelope)
       projector.scale.set(gain, gain, gain)
-      material.opacity = 0.32 + Math.min(0.48, salience * 0.85)
-      material.color.setRGB(0.95, 0.84 + salience * 0.12, 0.72 + salience * 0.2)
+      material.opacity = renderOptions.lockDominantPort && !isDominant ? 0.12 : 0.28 + Math.min(0.6, salience * 1.05)
+      material.color.setRGB(0.92, 0.82 + salience * 0.16, 0.7 + salience * 0.26)
     }
 
     for (const layout of nodeLayouts) {
@@ -834,36 +1072,90 @@ function ArchitectureProjectionSpace({
       const beamMesh = beamMeshRefs.current[layout.key]
       const beamMaterial = beamMaterialRefs.current[layout.key]
       if (!nodeMesh || !nodeMaterial || !beamMesh || !beamMaterial) continue
-
-      const simulation = simulationsByKey[layout.profileKey]
-      const runtimeNode = simulation?.nodes.find((node) => node.id === layout.nodeId)
-      if (!runtimeNode) {
+      const entry = runtimeLayouts.find((runtime) => runtime.layoutKey === layout.key)
+      if (!entry) {
         nodeMesh.visible = false
         beamMesh.visible = false
         continue
       }
 
-      nodeMesh.visible = true
-      nodeMesh.position.copy(layout.position)
-      const salience = runtimeNode.salience
-      const gain = 0.75 + salience * 2.4
-      nodeMesh.scale.set(gain, gain, gain)
-      const nodeColor = tierColor(layout.tier)
-      nodeColor.offsetHSL(0, 0, Math.min(0.12, salience * 0.18))
-      nodeMaterial.color.copy(nodeColor)
-      nodeMaterial.opacity = 0.36 + Math.min(0.5, salience * 0.8)
+      const onDominantPort = entry.runtimeNode.miniObjId % Math.max(1, miniObjectCount) === dominantPort
+      const deltaStrong = Math.abs(entry.delta1s) > 0.012
+      const deltaVisible = renderOptions.focusMode === "delta" ? deltaStrong : true
+      const isTop = topKeys.has(entry.layoutKey)
+      const visible = deltaVisible && (!renderOptions.lockDominantPort || onDominantPort || entry.profileKey === "reference")
+      nodeMesh.visible = visible
+      beamMesh.visible = visible
+      if (!visible) continue
 
-      const from = projectorPositions[runtimeNode.miniObjId % projectorPositions.length]
-      dirRef.current.subVectors(layout.position, from)
+      const modeKey = entry.profileId === "isp_3d_hybrid_reference" ? "solution1" : "solution2"
+      const baseColor = modePalette[modeKey][entry.tier].clone()
+      const level = levelByKey.get(entry.layoutKey) ?? "low"
+      if (level === "high") baseColor.offsetHSL(0, 0.18, 0.12)
+      else if (level === "medium") baseColor.offsetHSL(0, 0.06, 0.03)
+      else baseColor.offsetHSL(0, -0.1, -0.08)
+
+      if (entry.profileId === "isp_3d_hybrid_reference" && entry.nodeId === "lpddr_spill" && spillActive) {
+        baseColor.setRGB(1.0, 0.25, 0.18)
+      }
+
+      const salience = entry.salience
+      const deltaScale = THREE.MathUtils.clamp(Math.abs(entry.delta1s) * 9, 0, 1)
+      const confidenceBoost = 0.78 + confidence * 0.32
+      const activeScale = isTop ? 1 : 0.45
+      const pulseScale = deltaStrong ? (0.76 + pulseEnvelope * 0.42) : 0.9
+      nodeMesh.position.copy(entry.position)
+      const nodeScale = (0.62 + salience * 2.8) * activeScale * pulseScale
+      nodeMesh.scale.set(nodeScale, nodeScale, nodeScale)
+      nodeMaterial.color.copy(baseColor)
+      nodeMaterial.opacity = THREE.MathUtils.clamp((0.26 + salience * 0.88) * activeScale * confidenceBoost, 0.08, 0.96)
+
+      const from = projectorPositions[entry.runtimeNode.miniObjId % projectorPositions.length]
+      dirRef.current.subVectors(entry.position, from)
       const length = Math.max(0.001, dirRef.current.length())
       midRef.current.copy(from).addScaledVector(dirRef.current, 0.5)
-      beamMesh.visible = true
       beamMesh.position.copy(midRef.current)
       beamMesh.quaternion.setFromUnitVectors(upAxisRef.current, dirRef.current.normalize())
-      beamMesh.scale.set(1, length, 1)
-      const beamColor = tierColor(layout.tier)
-      beamMaterial.color.copy(beamColor)
-      beamMaterial.opacity = 0.14 + Math.min(0.48, salience * 0.68)
+      const radius = THREE.MathUtils.clamp(0.5 + salience * 2.6 + deltaScale, 0.35, 3.4)
+      beamMesh.scale.set(radius, length, radius)
+      beamMaterial.color.copy(baseColor)
+      beamMaterial.opacity = THREE.MathUtils.clamp((isTop ? 0.44 : 0.07) + salience * 0.42 + deltaScale * 0.28, 0.04, 0.92)
+    }
+
+    const showDiff = renderOptions.showDiffOverlay && simulationsByKey.reference && simulationsByKey.native
+    const portTotalsReference = Array.from({ length: miniObjectCount }, () => 0)
+    const portTotalsNative = Array.from({ length: miniObjectCount }, () => 0)
+    for (const node of referenceNodes) portTotalsReference[node.miniObjId % miniObjectCount] += node.salience
+    for (const node of nativeNodes) portTotalsNative[node.miniObjId % miniObjectCount] += node.salience
+    for (let port = 0; port < miniObjectCount; port += 1) {
+      const diffMesh = diffBeamMeshRefs.current[port]
+      const diffMaterial = diffBeamMaterialRefs.current[port]
+      if (!diffMesh || !diffMaterial) continue
+      if (!showDiff) {
+        diffMesh.visible = false
+        continue
+      }
+      const diff = portTotalsReference[port] - portTotalsNative[port]
+      const magnitude = Math.abs(diff)
+      const from = projectorPositions[port]
+      const to = new THREE.Vector3(0, yCenter, 0)
+      dirRef.current.subVectors(to, from)
+      const length = Math.max(0.001, dirRef.current.length())
+      midRef.current.copy(from).addScaledVector(dirRef.current, 0.5)
+      diffMesh.visible = magnitude >= 0.015
+      diffMesh.position.copy(midRef.current)
+      diffMesh.quaternion.setFromUnitVectors(upAxisRef.current, dirRef.current.normalize())
+      const width = THREE.MathUtils.clamp(0.3 + magnitude * 8, 0.2, 1.7)
+      diffMesh.scale.set(width, length, width)
+      if (diff >= 0) diffMaterial.color.setRGB(1.0, 0.34, 0.25)
+      else diffMaterial.color.setRGB(0.28, 0.7, 1.0)
+      diffMaterial.opacity = THREE.MathUtils.clamp(0.12 + magnitude * 1.9, 0.08, 0.82)
+    }
+
+    summaryCommitAccumulatorRef.current += delta
+    if (summaryCommitAccumulatorRef.current >= 0.22) {
+      summaryCommitAccumulatorRef.current = 0
+      setSummaryUi({ ...summaryRef.current })
     }
   })
 
@@ -885,6 +1177,25 @@ function ArchitectureProjectionSpace({
             color={new THREE.Color(0.95, 0.84, 0.72)}
             transparent
             opacity={0.4}
+          />
+        </mesh>
+      ))}
+      {Array.from({ length: miniObjectCount }, (_, index) => (
+        <mesh
+          key={`arch-diff-beam-${index}`}
+          ref={(mesh) => {
+            diffBeamMeshRefs.current[index] = mesh
+          }}
+        >
+          <cylinderGeometry args={[0.006, 0.006, 1, 8]} />
+          <meshBasicMaterial
+            ref={(material) => {
+              diffBeamMaterialRefs.current[index] = material
+            }}
+            color={new THREE.Color(0.8, 0.82, 0.86)}
+            transparent
+            opacity={0.16}
+            depthWrite={false}
           />
         </mesh>
       ))}
@@ -912,7 +1223,11 @@ function ArchitectureProjectionSpace({
               nodeMeshRefs.current[layout.key] = mesh
             }}
           >
-            <sphereGeometry args={[0.06, 10, 10]} />
+            {layout.profileId === "isp_3d_hybrid_reference" ? (
+              <boxGeometry args={[0.13, 0.09, 0.09]} />
+            ) : (
+              <sphereGeometry args={[0.06, 10, 10]} />
+            )}
             <meshBasicMaterial
               ref={(material) => {
                 nodeMaterialRefs.current[layout.key] = material
@@ -925,6 +1240,35 @@ function ArchitectureProjectionSpace({
           </mesh>
         </group>
       ))}
+      <Html position={[0, yCenter + Math.max(0.18, layerGap * 0.56), 0]} center>
+        <div
+          style={{
+            display: "flex",
+            gap: "6px",
+            padding: "6px 8px",
+            borderRadius: "10px",
+            border: "1px solid rgba(255,255,255,0.18)",
+            background: "rgba(8,10,16,0.76)",
+            backdropFilter: "blur(4px)",
+            color: "rgba(236,236,240,0.95)",
+            fontSize: "10px",
+            letterSpacing: "0.01em",
+            pointerEvents: "none",
+            userSelect: "none",
+            whiteSpace: "nowrap",
+          }}
+        >
+          <span>H/M/L {summaryUi.bandHigh}/{summaryUi.bandMedium}/{summaryUi.bandLow}</span>
+          <span>Port P{summaryUi.dominantPort + 1}</span>
+          <span style={{ color: summaryUi.spillActive ? "rgba(255,125,105,0.98)" : "rgba(198,215,232,0.96)" }}>
+            Spill {summaryUi.spillActive ? "ON" : "OFF"}
+          </span>
+          <span style={{ color: summaryUi.policyOverride ? "rgba(255,214,122,0.98)" : "rgba(198,215,232,0.96)" }}>
+            Override {summaryUi.policyOverride ? "ON" : "OFF"}
+          </span>
+          <span>Conf {(summaryUi.confidence * 100).toFixed(0)}%</span>
+        </div>
+      </Html>
     </group>
   )
 }
@@ -1167,6 +1511,8 @@ function SceneToolbar({
   onToggleDockMode,
   architectureDisplayMode,
   setArchitectureDisplayMode,
+  architectureRenderOptions,
+  setArchitectureRenderOptions,
 }: {
   isOpen: boolean
   setIsOpen: (open: boolean) => void
@@ -1184,6 +1530,8 @@ function SceneToolbar({
   onToggleDockMode: () => void
   architectureDisplayMode: ArchitectureDisplayMode
   setArchitectureDisplayMode: (mode: ArchitectureDisplayMode) => void
+  architectureRenderOptions: ArchitectureRenderOptions
+  setArchitectureRenderOptions: (next: ArchitectureRenderOptions) => void
 }) {
   const toggleButtonStyle = (active: boolean): CSSProperties => ({
     width: "38px",
@@ -1307,6 +1655,58 @@ function SceneToolbar({
             >
               <span style={{ fontSize: "10px", fontWeight: 700, letterSpacing: "0.03em" }}>ALL</span>
             </button>
+            <button
+              type="button"
+              title="Top-K Beam Density"
+              onClick={() => {
+                const nextTopK = architectureRenderOptions.topKBeams >= 10 ? 6 : architectureRenderOptions.topKBeams + 2
+                setArchitectureRenderOptions({ ...architectureRenderOptions, topKBeams: nextTopK })
+              }}
+              style={toggleButtonStyle(true)}
+            >
+              <span style={{ fontSize: "10px", fontWeight: 700, letterSpacing: "0.03em" }}>
+                K{architectureRenderOptions.topKBeams}
+              </span>
+            </button>
+            <button
+              type="button"
+              title="Show Only Delta Since Last Second"
+              onClick={() =>
+                setArchitectureRenderOptions({
+                  ...architectureRenderOptions,
+                  focusMode: architectureRenderOptions.focusMode === "normal" ? "delta" : "normal",
+                })
+              }
+              style={toggleButtonStyle(architectureRenderOptions.focusMode === "delta")}
+            >
+              <span style={{ fontSize: "10px", fontWeight: 700, letterSpacing: "0.03em" }}>DEL</span>
+            </button>
+            <button
+              type="button"
+              title="Lock On Dominant Port"
+              onClick={() =>
+                setArchitectureRenderOptions({
+                  ...architectureRenderOptions,
+                  lockDominantPort: !architectureRenderOptions.lockDominantPort,
+                })
+              }
+              style={toggleButtonStyle(architectureRenderOptions.lockDominantPort)}
+            >
+              <span style={{ fontSize: "10px", fontWeight: 700, letterSpacing: "0.03em" }}>LOCK</span>
+            </button>
+            <button
+              type="button"
+              title="A/B Diff Overlay"
+              onClick={() =>
+                setArchitectureRenderOptions({
+                  ...architectureRenderOptions,
+                  showDiffOverlay: !architectureRenderOptions.showDiffOverlay,
+                })
+              }
+              style={toggleButtonStyle(architectureRenderOptions.showDiffOverlay)}
+            >
+              <span style={{ fontSize: "10px", fontWeight: 700, letterSpacing: "0.03em" }}>DIFF</span>
+            </button>
           </div>
         )}
         <button
@@ -1349,6 +1749,12 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   const [showPlasticityPanel, setShowPlasticityPanel] = useState(false)
   const [showLogStatus, setShowLogStatus] = useState(false)
   const [architectureDisplayMode, setArchitectureDisplayMode] = useState<ArchitectureDisplayMode>("all")
+  const [architectureRenderOptions, setArchitectureRenderOptions] = useState<ArchitectureRenderOptions>({
+    topKBeams: 8,
+    focusMode: "normal",
+    lockDominantPort: false,
+    showDiffOverlay: false,
+  })
   const [playlistMode, setPlaylistMode] = useState<"fifo" | "lifo">("fifo")
   const [playlistWindowStart, setPlaylistWindowStart] = useState(0)
   const [quadrantSubstrateIndex, setQuadrantSubstrateIndex] = useState<number[]>(
@@ -1436,6 +1842,15 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   const architectureSimulationRef = useRef<ArchitectureSimulationBundle>({
     reference: null,
     native: null,
+  })
+  const architectureSummaryRef = useRef<ArchitectureSummary>({
+    bandHigh: 0,
+    bandMedium: 0,
+    bandLow: 0,
+    dominantPort: 0,
+    spillActive: false,
+    policyOverride: false,
+    confidence: 0.5,
   })
   
   const { camera, size } = useThree()
@@ -2610,6 +3025,7 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
         field: plasticityFieldRef.current,
         bandCount: FPS_THETA_BAND_COUNT,
         miniObjectCount: MINI_OBJECT_COUNT,
+        miniObjectThetas: miniObjectRoutingThetas,
         plasticThetaBins: PLASTIC_THETA_BINS,
         plasticRBins: PLASTIC_R_BINS,
         bristleMeta,
@@ -3138,6 +3554,52 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
       }
     })
   }, [effectiveQuadrantOrientation, quadrantSectionOuterRadius, domeCenterY, domeRadius])
+  const miniObjectRoutingThetas = useMemo(() => {
+    if (quadrantSubstrateTargets.length === 0) {
+      return Array.from({ length: MINI_OBJECT_COUNT }, (_, index) => canonTheta((index / MINI_OBJECT_COUNT) * TWO_PI))
+    }
+    return quadrantSubstrateTargets.map((target) =>
+      canonTheta(Math.atan2(target.worldPosition.z, target.worldPosition.x))
+    )
+  }, [quadrantSubstrateTargets])
+  const solutionPanelText = useMemo(() => {
+    const s1Grid1 = [
+      "Summary:",
+      "Title:: Solution 1: Stacked Hybrid Memory Projection (SHMP)",
+      "Description:: Solution 1 (SHMP): Models a 3D-stacked hybrid memory ISP strategy;",
+      "it shows how workload buffering/routing across 3D-SRAM + 3D-DRAM tiers",
+      "reduces off-chip DRAM traffic and power, with bristle/band salience used",
+      "to project and inspect those memory tradeoffs in the architecture display space.",
+      "",
+      "In conclusion: S1 visualizes a memory architecture decision system.",
+    ].join("\n")
+    const s1Grid2 =
+      'Architecture simulation system reference:: s1: simulateRotaryArchitecture(..., "isp_3d_hybrid_reference")'
+    const s2Grid1 = [
+      "Summary:",
+      "Title:: Solution 2: Native Rotary Beamforming Fabric (NRBF)",
+      "Description:: Solution 2 (NRBF): models a native rotary waveguide control",
+      "architecture: it treats the dome as a memoryless rotary encoder +",
+      "beamforming/routing fabric, where mini objects act as controllable",
+      "ports/mirrors to steer, split, and bias directional salience flow across",
+      "bristles, squads, and theta bands.",
+      "",
+      "In conclusion:: S2 visualizes a directional control architecture decision",
+      "system. Both use the same substrate (bristles/bands/squads) but project",
+      "different design logics onto it.",
+    ].join("\n")
+    const s2Grid2 =
+      'Architecture simulation system reference:: s2: simulateRotaryArchitecture(..., "native_rotary_projection")'
+    const emptyGrid = ""
+
+    if (architectureDisplayMode === "solution1") {
+      return [s1Grid1, s1Grid2, emptyGrid, emptyGrid]
+    }
+    if (architectureDisplayMode === "solution2") {
+      return [s2Grid1, s2Grid2, emptyGrid, emptyGrid]
+    }
+    return [s1Grid1, s1Grid2, s2Grid1, s2Grid2]
+  }, [architectureDisplayMode])
   const verticalDirection: 1 | -1 = cameraMode === "top" ? 1 : -1
   const isRimMiddleView = cameraMode === "rim"
   const pendingLogCount = Math.max(0, logBufferRef.current.length - lastApiSyncedCountRef.current)
@@ -3228,13 +3690,17 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
           <ArchitectureProjectionSpace
             simulationRef={architectureSimulationRef}
             miniObjSalienceRef={miniObjSalienceRef}
+            thetaBandSnapshotsRef={thetaBandSnapshotsRef}
             displayMode={architectureDisplayMode}
+            renderOptions={architectureRenderOptions}
+            summaryRef={architectureSummaryRef}
             yCenter={ARCH_PROJECTION_CENTER_Y}
             layerGap={ARCH_PROJECTION_LAYER_GAP}
             tetherRadius={CYLINDER_TETHER_RADIUS}
             miniObjectCount={MINI_OBJECT_COUNT}
             projectorY={CYLINDER_Y_OFFSET + CYLINDER_ROTATOR_GAP * 0.5}
             projectorRadius={CYLINDER_TETHER_RADIUS}
+            projectorThetas={miniObjectRoutingThetas}
           />
           <group scale={[2, 2, 2]}>
             <WaveguideField
@@ -3256,6 +3722,8 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
             { cellIndex: 3, local: [0.62, -0.62] as [number, number] },
           ].map(({ cellIndex, local }) => {
             const bristleId = getCellBristleId(cellIndex)
+            const cellPanelText = solutionPanelText[cellIndex] ?? ""
+            const hasPanelText = cellPanelText.trim().length > 0
             const energy = getBristleEnergy(bristleId)
             const selected = dockSelectedBristleId === bristleId
             const energyGlow = Math.min(1, energy * 0.65)
@@ -3294,7 +3762,7 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
                   <meshBasicMaterial
                     color={new THREE.Color(1, 0, 0)}
                     transparent
-                    opacity={1}
+                    opacity={hasPanelText ? 0.08 : 1}
                     depthTest={false}
                     depthWrite={false}
                     side={THREE.DoubleSide}
@@ -3305,12 +3773,32 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
                   <meshBasicMaterial
                     color={new THREE.Color(1, 0, 0)}
                     transparent
-                    opacity={1}
+                    opacity={hasPanelText ? 0.08 : 1}
                     depthTest={false}
                     depthWrite={false}
                     side={THREE.DoubleSide}
                   />
                 </mesh>
+                <mesh position={[0, 0, 0.03]}>
+                  <planeGeometry args={[1.04, 1.04]} />
+                  <meshBasicMaterial
+                    color={new THREE.Color(0.06, 0.07, 0.1)}
+                    transparent
+                    opacity={hasPanelText ? 0.72 : 0.24}
+                    side={THREE.DoubleSide}
+                    depthWrite={false}
+                  />
+                </mesh>
+                {hasPanelText && (
+                  <group position={[0, 0, 0.04]}>
+                    <BristleTextPanel
+                      text={cellPanelText}
+                      width={0.92}
+                      height={0.92}
+                      color={new THREE.Color(0.96, 0.93, 0.88)}
+                    />
+                  </group>
+                )}
               </group>
             )
           })}
@@ -3634,6 +4122,8 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
         }}
         architectureDisplayMode={architectureDisplayMode}
         setArchitectureDisplayMode={setArchitectureDisplayMode}
+        architectureRenderOptions={architectureRenderOptions}
+        setArchitectureRenderOptions={setArchitectureRenderOptions}
       />
 
       {/* Visual feedback: Grip mode indicators */}
