@@ -34,3 +34,7 @@ yarn-error.log*
 # TypeScript
 *.tsbuildinfo
 
+# Runtime plasticity session logs (keep local; do not commit)
+data/plasticity-logs/*.jsonl
+!data/plasticity-logs/.gitkeep
+
