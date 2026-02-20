@@ -69,6 +69,7 @@ interface WaveguideFieldProps {
   position?: THREE.Vector3
   colorPalette?: [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3]
   isSelected?: boolean
+  concaveDownFactor?: number
   onDoubleClick?: () => void
   onPointerEnter?: () => void
   onPointerLeave?: () => void
@@ -79,6 +80,7 @@ export default function WaveguideField({
   position = new THREE.Vector3(0, 0, 0),
   colorPalette,
   isSelected = true,
+  concaveDownFactor = 0,
   onDoubleClick,
   onPointerEnter,
   onPointerLeave,
@@ -147,6 +149,7 @@ export default function WaveguideField({
             transitionProgress={transitionProgress.current}
             colors={colors}
             isSelected={isSelected}
+            concaveDownFactor={concaveDownFactor}
           />
         ))}
         <BeamAnimator />
@@ -159,12 +162,14 @@ function AnimatedBeam({
   beam, 
   transitionProgress,
   colors,
-  isSelected
+  isSelected,
+  concaveDownFactor
 }: { 
   beam: BristleSpec
   transitionProgress: number
   colors: [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3]
   isSelected: boolean
+  concaveDownFactor: number
 }) {
   const meshRef = useRef<THREE.Mesh>(null)
 
@@ -224,6 +229,10 @@ function AnimatedBeam({
         new THREE.Vector3(...beam.flatPosition),
         transitionProgress,
       )
+      if (concaveDownFactor > 0) {
+        const radialSq = pos.x * pos.x + pos.z * pos.z
+        pos.y -= radialSq * concaveDownFactor
+      }
       meshRef.current.position.copy(pos)
 
       // Apply wave rotation when selected, otherwise use base rotation

@@ -98,7 +98,7 @@ const DOME_CAP_ZERO_Y = 0
 const DOME_RIM_OVERFILL_SCALE = 1.42
 const RIM_RING_PLANE_OFFSET_FACTOR = 1.6
 const RIM_RING_INVERT_X = Math.PI
-const TOOLBAR_HUD_VIEW_X = 0
+const TOOLBAR_HUD_VIEW_X = 0.86
 const TOOLBAR_HUD_VIEW_Y = -0.92
 const TOOLBAR_HUD_DISTANCE = 1.9
 const TOOLBAR_HUD_SCALE = 1.12
@@ -564,7 +564,8 @@ function CylinderRig({
 
   useFrame((_, delta) => {
     if (rotatorRef.current) {
-      rotatorRef.current.rotation.y += delta * 0.24
+      // Keep target surface static (no continuous azimuth spin).
+      rotatorRef.current.rotation.y = 0
     }
     const snapshots = thetaBandSnapshotsRef.current
     const salience = miniObjSalienceRef.current
@@ -1829,7 +1830,6 @@ function ToolbarHud3D({
   const ndcAnchorRef = useRef(new THREE.Vector3(TOOLBAR_HUD_VIEW_X, TOOLBAR_HUD_VIEW_Y, 0))
   const worldAnchorRef = useRef(new THREE.Vector3())
   const viewDirRef = useRef(new THREE.Vector3())
-  const launcherXRef = useRef(0)
   const { camera } = useThree()
 
   const buttons = useMemo(
@@ -1909,12 +1909,14 @@ function ToolbarHud3D({
   const buttonWidth = 0.13
   const buttonGap = 0.02
   const dockPadding = 0.06
+  const launcherRadius = 0.07
+  const dockToLauncherGap = 0.04
   const buttonsWidth = buttons.length * buttonWidth + Math.max(0, buttons.length - 1) * buttonGap
   const badgeWidth = showBadges ? 1.12 : 0
   const badgeGap = showBadges ? 0.05 : 0
   const dockWidth = isOpen ? buttonsWidth + badgeWidth + badgeGap + dockPadding * 2 : 0
   const dockHeight = 0.12
-  launcherXRef.current = isOpen ? dockWidth * 0.5 + 0.12 : 0
+  const dockCenterX = -(dockWidth * 0.5 + dockToLauncherGap + launcherRadius)
 
   useFrame(() => {
     if (!rootRef.current) return
@@ -1928,7 +1930,7 @@ function ToolbarHud3D({
   return (
     <group ref={rootRef} renderOrder={2500}>
       {isOpen && (
-        <group>
+        <group position={[dockCenterX, 0, 0]}>
           <mesh position={[0, 0, 0]}>
             <boxGeometry args={[dockWidth, dockHeight, 0.02]} />
             <meshBasicMaterial color={new THREE.Color(0.11, 0.24, 0.5)} transparent opacity={0.88} depthTest={false} />
@@ -1985,19 +1987,36 @@ function ToolbarHud3D({
         </group>
       )}
 
-      <group position={[launcherXRef.current, 0, 0.03]}>
+      <group position={[0, 0, 0.015]}>
         <mesh
           onClick={(event) => {
             event.stopPropagation()
             setIsOpen(!isOpen)
           }}
         >
-          <cylinderGeometry args={[0.07, 0.07, 0.032, 40]} />
-          <meshBasicMaterial color={new THREE.Color(0.21, 0.43, 0.8)} transparent opacity={0.96} depthTest={false} />
+          <cylinderGeometry args={[0.039, 0.039, 0.013, 48]} />
+          <meshBasicMaterial color={new THREE.Color(0.28, 0.3, 0.34)} transparent opacity={0.96} depthTest={false} />
         </mesh>
-        <Text position={[0, 0, 0.02]} fontSize={0.07} color={"#f3f7ff"} anchorX="center" anchorY="middle">
-          ≡
-        </Text>
+        <mesh position={[0, 0, 0.008]}>
+          <cylinderGeometry args={[0.031, 0.031, 0.006, 48]} />
+          <meshBasicMaterial color={new THREE.Color(0.72, 0.74, 0.78)} transparent opacity={0.94} depthTest={false} />
+        </mesh>
+        <mesh position={[0, 0, 0.011]}>
+          <torusGeometry args={[0.0225, 0.00225, 10, 48]} />
+          <meshBasicMaterial color={new THREE.Color(0.2, 0.21, 0.24)} transparent opacity={0.95} depthTest={false} />
+        </mesh>
+        <mesh position={[0, 0, 0.012]}>
+          <sphereGeometry args={[0.0035, 10, 10]} />
+          <meshBasicMaterial color={new THREE.Color(0.16, 0.17, 0.2)} transparent opacity={0.98} depthTest={false} />
+        </mesh>
+        <mesh position={[0, 0.014, 0.0125]}>
+          <planeGeometry args={[0.009, 0.002]} />
+          <meshBasicMaterial color={new THREE.Color(0.2, 0.21, 0.24)} transparent opacity={0.95} depthTest={false} />
+        </mesh>
+        <mesh position={[0, -0.014, 0.0125]}>
+          <planeGeometry args={[0.009, 0.002]} />
+          <meshBasicMaterial color={new THREE.Color(0.2, 0.21, 0.24)} transparent opacity={0.95} depthTest={false} />
+        </mesh>
       </group>
     </group>
   )
@@ -2030,7 +2049,7 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   const [selectedFieldIndex, setSelectedFieldIndex] = useState(2) // Start at center field (index 2)
   const [cameraMode, setCameraMode] = useState<"rim" | "top" | "bottom">("bottom")
   const [quadrantOrientation, setQuadrantOrientation] = useState<"top" | "bottom">("bottom")
-  const [isToolbarOpen, setIsToolbarOpen] = useState(true)
+  const [isToolbarOpen, setIsToolbarOpen] = useState(false)
   const [showQuadrantViewport, setShowQuadrantViewport] = useState(false)
   const [showQuadrantOutline, setShowQuadrantOutline] = useState(false)
   const [showConflictMeter, setShowConflictMeter] = useState(false)
@@ -2402,7 +2421,8 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
     [Y_RIM, domeRadius]
   )
   // Keep the cylinder assembly below the waveguide field, pulled deeper into the dome gap volume.
-  const CYLINDER_Y_OFFSET = useMemo(() => -domeRadius * 0.46, [domeRadius])
+  // Position target surface above the dome apex, centered on azimuth.
+  const CYLINDER_Y_OFFSET = useMemo(() => domeRadius * 0.32, [domeRadius])
   const CYLINDER_ROTATOR_GAP = useMemo(() => domeRadius * 0.09, [domeRadius])
   const CYLINDER_ROTATOR_Y_OFFSET = useMemo(
     () => CYLINDER_Y_OFFSET + CYLINDER_ROTATOR_GAP,
@@ -2419,6 +2439,30 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   const domeCenterY = useMemo(() => Y_RIM - domeRadius * 0.8, [Y_RIM, domeRadius])
   // Raise quadrant edges relative to the rim plane
   const quadrantPlaneY = useMemo(() => Y_RIM + domeRadius * 0.15, [Y_RIM, domeRadius])
+  const WAVEGUIDE_SCALE_Y = 2
+
+  const waveguideNativeRadius = useMemo(() => {
+    if (bristles.length === 0) return 4.6
+    let maxRadius = 0
+    for (const bristle of bristles) {
+      const [x, , z] = bristle.circularPosition
+      const radial = Math.hypot(x, z) + bristle.scale[0] * 1.5
+      if (radial > maxRadius) maxRadius = radial
+    }
+    return Math.max(0.001, maxRadius + 0.12)
+  }, [bristles])
+  const waveguideTargetRadius = useMemo(
+    () => domeRadius * DOME_RIM_OVERFILL_SCALE * 0.49,
+    [domeRadius]
+  )
+  const WAVEGUIDE_SCALE_XZ = useMemo(
+    () => waveguideTargetRadius / waveguideNativeRadius,
+    [waveguideTargetRadius, waveguideNativeRadius]
+  )
+  const waveguideConcaveDownFactor = useMemo(
+    () => ((WAVEGUIDE_SCALE_XZ * WAVEGUIDE_SCALE_XZ) / (2 * Math.max(0.001, waveguideTargetRadius) * WAVEGUIDE_SCALE_Y)) * 0.5,
+    [WAVEGUIDE_SCALE_XZ, waveguideTargetRadius]
+  )
 
   // Center waveguide is rendered at scale [2,2,2], so derive true outer radius from actual bristle geometry.
   const baleenOuterRadius = useMemo(() => {
@@ -4042,11 +4086,12 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
             projectorRadius={CYLINDER_TETHER_RADIUS}
             projectorThetas={miniObjectRoutingThetas}
           />
-          <group scale={[2, 2, 2]}>
+          <group scale={[WAVEGUIDE_SCALE_XZ, WAVEGUIDE_SCALE_Y, WAVEGUIDE_SCALE_XZ]}>
             <WaveguideField
               position={new THREE.Vector3(0, WAVEGUIDE_Y_OFFSET, 0)}
               colorPalette={centerField.colorPalette}
               isSelected={true}
+              concaveDownFactor={waveguideConcaveDownFactor}
               bristles={bristles}
             />
           </group>
