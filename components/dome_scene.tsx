@@ -25,28 +25,9 @@ import {
   type RotaryArchitectureSimulationId,
 } from "../utils/rotaryEncoder"
 
-function useComponentDebugCounters(name: string) {
-  const renderCounterRef = useRef(0)
-  renderCounterRef.current += 1
-
-  useEffect(() => {
-    if (typeof window === "undefined") return
-    const debugEnabled =
-      (window as any).__WG_DEBUG_RENDERS === true ||
-      window.localStorage.getItem("__WG_DEBUG_RENDERS") === "1"
-    if (!debugEnabled) return
-
-    console.count(`[mount] ${name}`)
-    const intervalId = window.setInterval(() => {
-      const renders = renderCounterRef.current
-      renderCounterRef.current = 0
-      console.info(`[render-rate/5s] ${name}: ${renders}`)
-    }, 5000)
-    return () => {
-      window.clearInterval(intervalId)
-      console.count(`[unmount] ${name}`)
-    }
-  }, [name])
+function isPerfDiagEnabled() {
+  if (typeof window === "undefined") return false
+  return (window as any).__WG_PERF_DIAG === true || window.localStorage.getItem("__WG_PERF_DIAG") === "1"
 }
 
 function sameArchitectureSummary(a: ArchitectureSummary, b: ArchitectureSummary) {
@@ -560,7 +541,6 @@ function CylinderRig({
   onRingTargetClickRef,
   onRingTargetLeaveRef,
 }: CylinderRigProps) {
-  useComponentDebugCounters("CylinderRig")
   const rotatorRef = useRef<THREE.Group>(null)
   const coreMeshRefs = useRef<Array<THREE.Mesh | null>>([])
   const coreMaterialRefs = useRef<Array<THREE.MeshBasicMaterial | null>>([])
@@ -875,7 +855,6 @@ function ArchitectureProjectionSpace({
   projectorRadius: number
   projectorThetas?: number[]
 }) {
-  useComponentDebugCounters("ArchitectureProjectionSpace")
   const nodeMeshRefs = useRef<Record<string, THREE.Mesh | null>>({})
   const nodeMaterialRefs = useRef<Record<string, THREE.MeshBasicMaterial | null>>({})
   const beamMeshRefs = useRef<Record<string, THREE.Mesh | null>>({})
@@ -1846,7 +1825,6 @@ function ToolbarHud3D({
   showBadges,
   setShowBadges,
 }: ToolbarHud3DProps) {
-  useComponentDebugCounters("ToolbarHud3D")
   const rootRef = useRef<THREE.Group>(null)
   const ndcAnchorRef = useRef(new THREE.Vector3(TOOLBAR_HUD_VIEW_X, TOOLBAR_HUD_VIEW_Y, 0))
   const worldAnchorRef = useRef(new THREE.Vector3())
@@ -2045,7 +2023,6 @@ const MemoToolbarHud3D = memo(
 )
 
 export default function DomeScene({ onExit, bristles, colorPalette, tensorServiceRef: externalTensorServiceRef }: DomeSceneProps) {
-  useComponentDebugCounters("DomeScene")
   const groupRef = useRef<THREE.Group>(null)
   const bristleGroupRef = useRef<THREE.Group>(null)
   const centerBristleRef = useRef<THREE.Mesh>(null)
@@ -2159,6 +2136,9 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   const frameTargetRef = useRef(new THREE.Vector3())
   const frameBasePositionRef = useRef(new THREE.Vector3())
   const frameFinalPositionRef = useRef(new THREE.Vector3())
+  const perfFrameCountRef = useRef(0)
+  const perfFrameTimeRef = useRef(0)
+  const perfMaxDeltaRef = useRef(0)
   const rotaryFrameStoreRef = useRef(createRotaryFrameStore(1200))
   const architectureSimulationRef = useRef<ArchitectureSimulationBundle>({
     reference: null,
@@ -2194,6 +2174,24 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   const handlePlaylistStepBackward = () => {
     setPlaylistWindowStart((prev) => Math.max(prev - 1, 0))
   }
+
+  useEffect(() => {
+    if (!isPerfDiagEnabled()) return
+    const intervalId = window.setInterval(() => {
+      const frames = perfFrameCountRef.current
+      const totalSec = perfFrameTimeRef.current
+      const maxDeltaSec = perfMaxDeltaRef.current
+      const fps = totalSec > 0 ? frames / totalSec : 0
+      const avgDeltaMs = frames > 0 ? (totalSec / frames) * 1000 : 0
+      console.info(
+        `[perf/5s] dome fps=${fps.toFixed(1)} frames=${frames} avgDeltaMs=${avgDeltaMs.toFixed(2)} maxDeltaMs=${(maxDeltaSec * 1000).toFixed(2)}`
+      )
+      perfFrameCountRef.current = 0
+      perfFrameTimeRef.current = 0
+      perfMaxDeltaRef.current = 0
+    }, 5000)
+    return () => window.clearInterval(intervalId)
+  }, [])
 
   // Tagging system state
   const taggingServiceRef = useRef<TaggingService>(new TaggingService())
@@ -3144,6 +3142,10 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   }, [cameraMode])
 
   useFrame((state, delta) => {
+    perfFrameCountRef.current += 1
+    perfFrameTimeRef.current += delta
+    if (delta > perfMaxDeltaRef.current) perfMaxDeltaRef.current = delta
+
     const t = state.clock.elapsedTime
 
     if (groupRef.current && ENABLE_SCENE_IDLE_SPIN) {
