@@ -784,6 +784,7 @@ export default function Page() {
         {/* Ambient light for HUD ridge */}
         <ambientLight intensity={0.5} />
         <OrbitControls 
+          enabled={!isDomeScene}
           enableDamping 
           dampingFactor={0.05} 
           rotateSpeed={0.5} 

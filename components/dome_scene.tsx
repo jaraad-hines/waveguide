@@ -1,8 +1,8 @@
 "use client"
 
-import { memo, useMemo, useRef, useState, useEffect, Suspense, type CSSProperties } from "react"
+import { memo, useMemo, useRef, useState, useEffect, useCallback, Suspense, type CSSProperties } from "react"
 import { useFrame, useThree } from "@react-three/fiber"
-import { Html } from "@react-three/drei"
+import { Html, Text } from "@react-three/drei"
 import * as THREE from "three"
 import { Menu, Grid2X2, Gauge, Link2, FileText } from "lucide-react"
 import { BristleSpec, buildBristleMeta, canonTheta } from "./bristleLayout"
@@ -24,6 +24,42 @@ import {
   type RotaryArchitectureSimulation,
   type RotaryArchitectureSimulationId,
 } from "../utils/rotaryEncoder"
+
+function useComponentDebugCounters(name: string) {
+  const renderCounterRef = useRef(0)
+  renderCounterRef.current += 1
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const debugEnabled =
+      (window as any).__WG_DEBUG_RENDERS === true ||
+      window.localStorage.getItem("__WG_DEBUG_RENDERS") === "1"
+    if (!debugEnabled) return
+
+    console.count(`[mount] ${name}`)
+    const intervalId = window.setInterval(() => {
+      const renders = renderCounterRef.current
+      renderCounterRef.current = 0
+      console.info(`[render-rate/5s] ${name}: ${renders}`)
+    }, 5000)
+    return () => {
+      window.clearInterval(intervalId)
+      console.count(`[unmount] ${name}`)
+    }
+  }, [name])
+}
+
+function sameArchitectureSummary(a: ArchitectureSummary, b: ArchitectureSummary) {
+  return (
+    a.bandHigh === b.bandHigh &&
+    a.bandMedium === b.bandMedium &&
+    a.bandLow === b.bandLow &&
+    a.dominantPort === b.dominantPort &&
+    a.spillActive === b.spillActive &&
+    a.policyOverride === b.policyOverride &&
+    Math.abs(a.confidence - b.confidence) < 0.015
+  )
+}
 
 // Grip mode types
 export type GripMode = "orbit_scan" | "meridian_dive" | "helical_descent" | "event_lensing" | "tensol_jump"
@@ -81,6 +117,10 @@ const DOME_CAP_ZERO_Y = 0
 const DOME_RIM_OVERFILL_SCALE = 1.42
 const RIM_RING_PLANE_OFFSET_FACTOR = 1.6
 const RIM_RING_INVERT_X = Math.PI
+const TOOLBAR_HUD_VIEW_X = 0
+const TOOLBAR_HUD_VIEW_Y = -0.92
+const TOOLBAR_HUD_DISTANCE = 1.9
+const TOOLBAR_HUD_SCALE = 1.12
 const ENABLE_SCENE_IDLE_SPIN = false
 const CAMERA_LERP_GAIN = 2
 const CAMERA_SNAP_EPS = 0.0006
@@ -520,6 +560,7 @@ function CylinderRig({
   onRingTargetClickRef,
   onRingTargetLeaveRef,
 }: CylinderRigProps) {
+  useComponentDebugCounters("CylinderRig")
   const rotatorRef = useRef<THREE.Group>(null)
   const coreMeshRefs = useRef<Array<THREE.Mesh | null>>([])
   const coreMaterialRefs = useRef<Array<THREE.MeshBasicMaterial | null>>([])
@@ -810,6 +851,7 @@ function ArchitectureProjectionSpace({
   displayMode,
   renderOptions,
   summaryRef,
+  onSummaryUi,
   yCenter,
   layerGap,
   tetherRadius,
@@ -824,6 +866,7 @@ function ArchitectureProjectionSpace({
   displayMode: ArchitectureDisplayMode
   renderOptions: ArchitectureRenderOptions
   summaryRef: MutableRef<ArchitectureSummary>
+  onSummaryUi?: (summary: ArchitectureSummary) => void
   yCenter: number
   layerGap: number
   tetherRadius: number
@@ -832,6 +875,7 @@ function ArchitectureProjectionSpace({
   projectorRadius: number
   projectorThetas?: number[]
 }) {
+  useComponentDebugCounters("ArchitectureProjectionSpace")
   const nodeMeshRefs = useRef<Record<string, THREE.Mesh | null>>({})
   const nodeMaterialRefs = useRef<Record<string, THREE.MeshBasicMaterial | null>>({})
   const beamMeshRefs = useRef<Record<string, THREE.Mesh | null>>({})
@@ -845,15 +889,7 @@ function ArchitectureProjectionSpace({
   const midRef = useRef(new THREE.Vector3())
   const nodeHistoryRef = useRef<Map<string, Array<{ t: number; v: number }>>>(new Map())
   const summaryCommitAccumulatorRef = useRef(0)
-  const [summaryUi, setSummaryUi] = useState<ArchitectureSummary>({
-    bandHigh: 0,
-    bandMedium: 0,
-    bandLow: 0,
-    dominantPort: 0,
-    spillActive: false,
-    policyOverride: false,
-    confidence: 0.5,
-  })
+  const lastSummaryUiRef = useRef<ArchitectureSummary | null>(null)
 
   const modePalette = useMemo(
     () => ({
@@ -1153,9 +1189,14 @@ function ArchitectureProjectionSpace({
     }
 
     summaryCommitAccumulatorRef.current += delta
-    if (summaryCommitAccumulatorRef.current >= 0.22) {
+    if (summaryCommitAccumulatorRef.current >= 0.75) {
       summaryCommitAccumulatorRef.current = 0
-      setSummaryUi({ ...summaryRef.current })
+      const nextSummary = { ...summaryRef.current }
+      const prevSummary = lastSummaryUiRef.current
+      if (!prevSummary || !sameArchitectureSummary(prevSummary, nextSummary)) {
+        lastSummaryUiRef.current = nextSummary
+        onSummaryUi?.(nextSummary)
+      }
     }
   })
 
@@ -1240,35 +1281,6 @@ function ArchitectureProjectionSpace({
           </mesh>
         </group>
       ))}
-      <Html position={[0, yCenter + Math.max(0.18, layerGap * 0.56), 0]} center>
-        <div
-          style={{
-            display: "flex",
-            gap: "6px",
-            padding: "6px 8px",
-            borderRadius: "10px",
-            border: "1px solid rgba(255,255,255,0.18)",
-            background: "rgba(8,10,16,0.76)",
-            backdropFilter: "blur(4px)",
-            color: "rgba(236,236,240,0.95)",
-            fontSize: "10px",
-            letterSpacing: "0.01em",
-            pointerEvents: "none",
-            userSelect: "none",
-            whiteSpace: "nowrap",
-          }}
-        >
-          <span>H/M/L {summaryUi.bandHigh}/{summaryUi.bandMedium}/{summaryUi.bandLow}</span>
-          <span>Port P{summaryUi.dominantPort + 1}</span>
-          <span style={{ color: summaryUi.spillActive ? "rgba(255,125,105,0.98)" : "rgba(198,215,232,0.96)" }}>
-            Spill {summaryUi.spillActive ? "ON" : "OFF"}
-          </span>
-          <span style={{ color: summaryUi.policyOverride ? "rgba(255,214,122,0.98)" : "rgba(198,215,232,0.96)" }}>
-            Override {summaryUi.policyOverride ? "ON" : "OFF"}
-          </span>
-          <span>Conf {(summaryUi.confidence * 100).toFixed(0)}%</span>
-        </div>
-      </Html>
     </group>
   )
 }
@@ -1513,6 +1525,9 @@ function SceneToolbar({
   setArchitectureDisplayMode,
   architectureRenderOptions,
   setArchitectureRenderOptions,
+  architectureSummary,
+  showBadges,
+  setShowBadges,
 }: {
   isOpen: boolean
   setIsOpen: (open: boolean) => void
@@ -1532,7 +1547,16 @@ function SceneToolbar({
   setArchitectureDisplayMode: (mode: ArchitectureDisplayMode) => void
   architectureRenderOptions: ArchitectureRenderOptions
   setArchitectureRenderOptions: (next: ArchitectureRenderOptions) => void
+  architectureSummary: ArchitectureSummary
+  showBadges: boolean
+  setShowBadges: (show: boolean) => void
 }) {
+  const toolbarPortalRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    if (typeof document !== "undefined") {
+      toolbarPortalRef.current = document.body
+    }
+  }, [])
   const toggleButtonStyle = (active: boolean): CSSProperties => ({
     width: "38px",
     height: "38px",
@@ -1549,40 +1573,73 @@ function SceneToolbar({
   return (
     <Html
       fullscreen
+      portal={toolbarPortalRef as any}
       style={{
         pointerEvents: "none",
-        position: "absolute",
+        position: "fixed",
         inset: 0,
       }}
     >
       <div
         style={{
           position: "fixed",
-          right: "-580px",
-          top: "50%",
-          transform: "translateY(-50%)",
+          left: "50%",
+          bottom: "calc(env(safe-area-inset-bottom) + 18px)",
+          transform: "translateX(-50%)",
           display: "flex",
-          flexDirection: "column",
-          gap: "8px",
-          alignItems: "flex-end",
+          flexDirection: "row",
+          gap: "10px",
+          alignItems: "center",
           pointerEvents: "auto",
           userSelect: "none",
-          zIndex: 1200,
+          zIndex: 2200,
         }}
       >
         {isOpen && (
           <div
             style={{
-              padding: "8px",
-              borderRadius: "12px",
-              border: "1px solid rgba(255,255,255,0.16)",
-              background: "rgba(9, 11, 16, 0.88)",
+              padding: "10px",
+              borderRadius: "18px",
+              border: "1px solid rgba(255,255,255,0.2)",
+              background: "linear-gradient(180deg, rgba(88,151,255,0.72), rgba(26,60,116,0.9))",
               backdropFilter: "blur(6px)",
               display: "flex",
-              flexDirection: "column",
+              flexDirection: "row",
               gap: "8px",
+              alignItems: "center",
+              maxWidth: "92vw",
+              overflowX: "auto",
+              boxShadow: "0 10px 24px rgba(0,0,0,0.34)",
             }}
           >
+            {showBadges && (
+              <div
+                style={{
+                  display: "flex",
+                  gap: "8px",
+                  padding: "7px 10px",
+                  borderRadius: "12px",
+                  border: "1px solid rgba(255,255,255,0.2)",
+                  background: "linear-gradient(180deg, rgba(38,88,168,0.84), rgba(17,38,76,0.86))",
+                  boxShadow: "0 6px 16px rgba(0,0,0,0.24)",
+                  color: "rgba(242,246,252,0.96)",
+                  fontSize: "10px",
+                  letterSpacing: "0.01em",
+                  whiteSpace: "nowrap",
+                  flexShrink: 0,
+                }}
+              >
+                <span>H/M/L {architectureSummary.bandHigh}/{architectureSummary.bandMedium}/{architectureSummary.bandLow}</span>
+                <span>Port P{architectureSummary.dominantPort + 1}</span>
+                <span style={{ color: architectureSummary.spillActive ? "rgba(255,185,170,1)" : "rgba(225,238,255,0.96)" }}>
+                  Spill {architectureSummary.spillActive ? "ON" : "OFF"}
+                </span>
+                <span style={{ color: architectureSummary.policyOverride ? "rgba(255,225,138,0.98)" : "rgba(225,238,255,0.96)" }}>
+                  Override {architectureSummary.policyOverride ? "ON" : "OFF"}
+                </span>
+                <span>Conf {(architectureSummary.confidence * 100).toFixed(0)}%</span>
+              </div>
+            )}
             <button
               type="button"
               title="Quadrant Viewport"
@@ -1622,6 +1679,14 @@ function SceneToolbar({
               style={toggleButtonStyle(showLogStatus)}
             >
               <FileText size={18} />
+            </button>
+            <button
+              type="button"
+              title="Badges"
+              onClick={() => setShowBadges(!showBadges)}
+              style={toggleButtonStyle(showBadges)}
+            >
+              <span style={{ fontSize: "9px", fontWeight: 700, letterSpacing: "0.03em" }}>BDG</span>
             </button>
             <button
               type="button"
@@ -1714,11 +1779,11 @@ function SceneToolbar({
           title={isOpen ? "Close Toolbar" : "Open Toolbar"}
           onClick={() => setIsOpen(!isOpen)}
           style={{
-            width: "46px",
-            height: "46px",
-            borderRadius: "14px",
+            width: "52px",
+            height: "52px",
+            borderRadius: "50%",
             border: "1px solid rgba(255,255,255,0.2)",
-            background: "rgba(11, 13, 20, 0.95)",
+            background: "linear-gradient(180deg, rgba(64,122,225,0.94), rgba(28,58,112,0.95))",
             color: "rgba(245,245,245,0.96)",
             display: "flex",
             alignItems: "center",
@@ -1734,7 +1799,253 @@ function SceneToolbar({
   )
 }
 
+type ToolbarHud3DProps = {
+  isOpen: boolean
+  setIsOpen: (open: boolean) => void
+  showQuadrantViewport: boolean
+  setShowQuadrantViewport: (show: boolean) => void
+  showQuadrantOutline: boolean
+  setShowQuadrantOutline: (show: boolean) => void
+  showConflictMeter: boolean
+  setShowConflictMeter: (show: boolean) => void
+  showPlasticity: boolean
+  setShowPlasticity: (show: boolean) => void
+  showLogStatus: boolean
+  setShowLogStatus: (show: boolean) => void
+  isDockMode: boolean
+  onToggleDockMode: () => void
+  architectureDisplayMode: ArchitectureDisplayMode
+  setArchitectureDisplayMode: (mode: ArchitectureDisplayMode) => void
+  architectureRenderOptions: ArchitectureRenderOptions
+  setArchitectureRenderOptions: (next: ArchitectureRenderOptions) => void
+  architectureSummary: ArchitectureSummary
+  showBadges: boolean
+  setShowBadges: (show: boolean) => void
+}
+
+function ToolbarHud3D({
+  isOpen,
+  setIsOpen,
+  showQuadrantViewport,
+  setShowQuadrantViewport,
+  showQuadrantOutline,
+  setShowQuadrantOutline,
+  showConflictMeter,
+  setShowConflictMeter,
+  showPlasticity,
+  setShowPlasticity,
+  showLogStatus,
+  setShowLogStatus,
+  isDockMode,
+  onToggleDockMode,
+  architectureDisplayMode,
+  setArchitectureDisplayMode,
+  architectureRenderOptions,
+  setArchitectureRenderOptions,
+  architectureSummary,
+  showBadges,
+  setShowBadges,
+}: ToolbarHud3DProps) {
+  useComponentDebugCounters("ToolbarHud3D")
+  const rootRef = useRef<THREE.Group>(null)
+  const ndcAnchorRef = useRef(new THREE.Vector3(TOOLBAR_HUD_VIEW_X, TOOLBAR_HUD_VIEW_Y, 0))
+  const worldAnchorRef = useRef(new THREE.Vector3())
+  const viewDirRef = useRef(new THREE.Vector3())
+  const launcherXRef = useRef(0)
+  const { camera } = useThree()
+
+  const buttons = useMemo(
+    () => [
+      { key: "QV", label: "QV", active: showQuadrantViewport, onClick: () => setShowQuadrantViewport(!showQuadrantViewport) },
+      { key: "QO", label: "QO", active: showQuadrantOutline, onClick: () => setShowQuadrantOutline(!showQuadrantOutline) },
+      { key: "CF", label: "CF", active: showConflictMeter, onClick: () => setShowConflictMeter(!showConflictMeter) },
+      { key: "PL", label: "PL", active: showPlasticity, onClick: () => setShowPlasticity(!showPlasticity) },
+      { key: "LOG", label: "LOG", active: showLogStatus, onClick: () => setShowLogStatus(!showLogStatus) },
+      { key: "BDG", label: "BDG", active: showBadges, onClick: () => setShowBadges(!showBadges) },
+      { key: "DG", label: "DG", active: isDockMode, onClick: onToggleDockMode },
+      { key: "S1", label: "S1", active: architectureDisplayMode === "solution1", onClick: () => setArchitectureDisplayMode("solution1") },
+      { key: "S2", label: "S2", active: architectureDisplayMode === "solution2", onClick: () => setArchitectureDisplayMode("solution2") },
+      { key: "ALL", label: "ALL", active: architectureDisplayMode === "all", onClick: () => setArchitectureDisplayMode("all") },
+      {
+        key: "K",
+        label: `K${architectureRenderOptions.topKBeams}`,
+        active: true,
+        onClick: () => {
+          const nextTopK = architectureRenderOptions.topKBeams >= 10 ? 6 : architectureRenderOptions.topKBeams + 2
+          setArchitectureRenderOptions({ ...architectureRenderOptions, topKBeams: nextTopK })
+        },
+      },
+      {
+        key: "DEL",
+        label: "DEL",
+        active: architectureRenderOptions.focusMode === "delta",
+        onClick: () =>
+          setArchitectureRenderOptions({
+            ...architectureRenderOptions,
+            focusMode: architectureRenderOptions.focusMode === "normal" ? "delta" : "normal",
+          }),
+      },
+      {
+        key: "LOCK",
+        label: "LOCK",
+        active: architectureRenderOptions.lockDominantPort,
+        onClick: () =>
+          setArchitectureRenderOptions({
+            ...architectureRenderOptions,
+            lockDominantPort: !architectureRenderOptions.lockDominantPort,
+          }),
+      },
+      {
+        key: "DIFF",
+        label: "DIFF",
+        active: architectureRenderOptions.showDiffOverlay,
+        onClick: () =>
+          setArchitectureRenderOptions({
+            ...architectureRenderOptions,
+            showDiffOverlay: !architectureRenderOptions.showDiffOverlay,
+          }),
+      },
+    ],
+    [
+      showQuadrantViewport,
+      setShowQuadrantViewport,
+      showQuadrantOutline,
+      setShowQuadrantOutline,
+      showConflictMeter,
+      setShowConflictMeter,
+      showPlasticity,
+      setShowPlasticity,
+      showLogStatus,
+      setShowLogStatus,
+      showBadges,
+      setShowBadges,
+      isDockMode,
+      onToggleDockMode,
+      architectureDisplayMode,
+      setArchitectureDisplayMode,
+      architectureRenderOptions,
+      setArchitectureRenderOptions,
+    ]
+  )
+
+  const buttonWidth = 0.13
+  const buttonGap = 0.02
+  const dockPadding = 0.06
+  const buttonsWidth = buttons.length * buttonWidth + Math.max(0, buttons.length - 1) * buttonGap
+  const badgeWidth = showBadges ? 1.12 : 0
+  const badgeGap = showBadges ? 0.05 : 0
+  const dockWidth = isOpen ? buttonsWidth + badgeWidth + badgeGap + dockPadding * 2 : 0
+  const dockHeight = 0.12
+  launcherXRef.current = isOpen ? dockWidth * 0.5 + 0.12 : 0
+
+  useFrame(() => {
+    if (!rootRef.current) return
+    worldAnchorRef.current.copy(ndcAnchorRef.current).unproject(camera)
+    viewDirRef.current.copy(worldAnchorRef.current).sub(camera.position).normalize()
+    rootRef.current.position.copy(camera.position).addScaledVector(viewDirRef.current, TOOLBAR_HUD_DISTANCE)
+    rootRef.current.quaternion.copy(camera.quaternion)
+    rootRef.current.scale.setScalar(TOOLBAR_HUD_SCALE)
+  })
+
+  return (
+    <group ref={rootRef} renderOrder={2500}>
+      {isOpen && (
+        <group>
+          <mesh position={[0, 0, 0]}>
+            <boxGeometry args={[dockWidth, dockHeight, 0.02]} />
+            <meshBasicMaterial color={new THREE.Color(0.11, 0.24, 0.5)} transparent opacity={0.88} depthTest={false} />
+          </mesh>
+          <mesh position={[0, 0.01, 0.012]}>
+            <boxGeometry args={[dockWidth - 0.01, dockHeight - 0.018, 0.01]} />
+            <meshBasicMaterial color={new THREE.Color(0.2, 0.39, 0.74)} transparent opacity={0.62} depthTest={false} />
+          </mesh>
+
+          {showBadges && (
+            <group position={[-dockWidth * 0.5 + dockPadding + badgeWidth * 0.5, 0, 0.016]}>
+              <mesh>
+                <boxGeometry args={[badgeWidth, 0.09, 0.01]} />
+                <meshBasicMaterial color={new THREE.Color(0.14, 0.28, 0.58)} transparent opacity={0.9} depthTest={false} />
+              </mesh>
+              <Text
+                position={[0, 0, 0.008]}
+                fontSize={0.025}
+                color={"#f2f7ff"}
+                anchorX="center"
+                anchorY="middle"
+                maxWidth={badgeWidth - 0.06}
+              >
+                {`H/M/L ${architectureSummary.bandHigh}/${architectureSummary.bandMedium}/${architectureSummary.bandLow}   Port P${architectureSummary.dominantPort + 1}   Spill ${architectureSummary.spillActive ? "ON" : "OFF"}   Override ${architectureSummary.policyOverride ? "ON" : "OFF"}   Conf ${(architectureSummary.confidence * 100).toFixed(0)}%`}
+              </Text>
+            </group>
+          )}
+
+          {buttons.map((button, index) => {
+            const xStart = -dockWidth * 0.5 + dockPadding + (showBadges ? badgeWidth + badgeGap : 0)
+            const x = xStart + index * (buttonWidth + buttonGap) + buttonWidth * 0.5
+            return (
+              <group key={button.key} position={[x, 0, 0.018]}>
+                <mesh
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    button.onClick()
+                  }}
+                >
+                  <boxGeometry args={[buttonWidth, 0.09, 0.018]} />
+                  <meshBasicMaterial
+                    color={button.active ? new THREE.Color(0.37, 0.58, 0.88) : new THREE.Color(0.13, 0.2, 0.36)}
+                    transparent
+                    opacity={button.active ? 0.95 : 0.9}
+                    depthTest={false}
+                  />
+                </mesh>
+                <Text position={[0, 0, 0.012]} fontSize={0.03} color={"#f5f7ff"} anchorX="center" anchorY="middle">
+                  {button.label}
+                </Text>
+              </group>
+            )
+          })}
+        </group>
+      )}
+
+      <group position={[launcherXRef.current, 0, 0.03]}>
+        <mesh
+          onClick={(event) => {
+            event.stopPropagation()
+            setIsOpen(!isOpen)
+          }}
+        >
+          <cylinderGeometry args={[0.07, 0.07, 0.032, 40]} />
+          <meshBasicMaterial color={new THREE.Color(0.21, 0.43, 0.8)} transparent opacity={0.96} depthTest={false} />
+        </mesh>
+        <Text position={[0, 0, 0.02]} fontSize={0.07} color={"#f3f7ff"} anchorX="center" anchorY="middle">
+          ≡
+        </Text>
+      </group>
+    </group>
+  )
+}
+
+const MemoToolbarHud3D = memo(
+  ToolbarHud3D,
+  (prev, next) =>
+    prev.isOpen === next.isOpen &&
+    prev.showQuadrantViewport === next.showQuadrantViewport &&
+    prev.showQuadrantOutline === next.showQuadrantOutline &&
+    prev.showConflictMeter === next.showConflictMeter &&
+    prev.showPlasticity === next.showPlasticity &&
+    prev.showLogStatus === next.showLogStatus &&
+    prev.isDockMode === next.isDockMode &&
+    prev.architectureDisplayMode === next.architectureDisplayMode &&
+    prev.showBadges === next.showBadges &&
+    prev.architectureRenderOptions.topKBeams === next.architectureRenderOptions.topKBeams &&
+    prev.architectureRenderOptions.focusMode === next.architectureRenderOptions.focusMode &&
+    prev.architectureRenderOptions.lockDominantPort === next.architectureRenderOptions.lockDominantPort &&
+    prev.architectureRenderOptions.showDiffOverlay === next.architectureRenderOptions.showDiffOverlay &&
+    sameArchitectureSummary(prev.architectureSummary, next.architectureSummary)
+)
+
 export default function DomeScene({ onExit, bristles, colorPalette, tensorServiceRef: externalTensorServiceRef }: DomeSceneProps) {
+  useComponentDebugCounters("DomeScene")
   const groupRef = useRef<THREE.Group>(null)
   const bristleGroupRef = useRef<THREE.Group>(null)
   const centerBristleRef = useRef<THREE.Mesh>(null)
@@ -1742,18 +2053,28 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   const [selectedFieldIndex, setSelectedFieldIndex] = useState(2) // Start at center field (index 2)
   const [cameraMode, setCameraMode] = useState<"rim" | "top" | "bottom">("bottom")
   const [quadrantOrientation, setQuadrantOrientation] = useState<"top" | "bottom">("bottom")
-  const [isToolbarOpen, setIsToolbarOpen] = useState(false)
+  const [isToolbarOpen, setIsToolbarOpen] = useState(true)
   const [showQuadrantViewport, setShowQuadrantViewport] = useState(false)
   const [showQuadrantOutline, setShowQuadrantOutline] = useState(false)
   const [showConflictMeter, setShowConflictMeter] = useState(false)
   const [showPlasticityPanel, setShowPlasticityPanel] = useState(false)
   const [showLogStatus, setShowLogStatus] = useState(false)
+  const [showToolbarBadges, setShowToolbarBadges] = useState(true)
   const [architectureDisplayMode, setArchitectureDisplayMode] = useState<ArchitectureDisplayMode>("all")
   const [architectureRenderOptions, setArchitectureRenderOptions] = useState<ArchitectureRenderOptions>({
     topKBeams: 8,
     focusMode: "normal",
     lockDominantPort: false,
     showDiffOverlay: false,
+  })
+  const [architectureSummaryUi, setArchitectureSummaryUi] = useState<ArchitectureSummary>({
+    bandHigh: 0,
+    bandMedium: 0,
+    bandLow: 0,
+    dominantPort: 0,
+    spillActive: false,
+    policyOverride: false,
+    confidence: 0.5,
   })
   const [playlistMode, setPlaylistMode] = useState<"fifo" | "lifo">("fifo")
   const [playlistWindowStart, setPlaylistWindowStart] = useState(0)
@@ -1858,6 +2179,13 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
     diameterPx: 620,
     innerRadiusPct: 26,
   })
+  const quadrantViewportMetricsRef = useRef(quadrantViewportMetrics)
+  useEffect(() => {
+    quadrantViewportMetricsRef.current = quadrantViewportMetrics
+  }, [quadrantViewportMetrics])
+  const handleArchitectureSummaryUi = useCallback((next: ArchitectureSummary) => {
+    setArchitectureSummaryUi((prev) => (sameArchitectureSummary(prev, next) ? prev : next))
+  }, [])
 
   const handlePlaylistStepForward = () => {
     setPlaylistWindowStart((prev) => Math.min(prev + 1, PLAYLIST_MAX_INDEX - PLAYLIST_VISIBLE_COUNT))
@@ -2471,7 +2799,11 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
       lastPersistedCountRef.current = Math.min(lastPersistedCountRef.current, logBufferRef.current.length)
       lastApiSyncedCountRef.current = Math.min(lastApiSyncedCountRef.current, logBufferRef.current.length)
     }
-    if (process.env.NODE_ENV !== "production") {
+    const plasticityDebugEnabled =
+      typeof window !== "undefined" &&
+      (((window as any).__WG_DEBUG_PLASTICITY === true) ||
+        window.localStorage.getItem("__WG_DEBUG_PLASTICITY") === "1")
+    if (process.env.NODE_ENV !== "production" && plasticityDebugEnabled) {
       console.debug("[plasticity-log]", entry)
     }
   }
@@ -2961,18 +3293,23 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
       const nextInnerPct = Math.max(0, Math.min(49.5, (innerPx / outerPx) * 50))
 
       viewportMetricsCommitAccumulatorRef.current += delta
-      if (
-        viewportMetricsCommitAccumulatorRef.current >= 0.12 &&
-        (
-          Math.abs(nextDiameter - quadrantViewportMetrics.diameterPx) > 0.75 ||
-          Math.abs(nextInnerPct - quadrantViewportMetrics.innerRadiusPct) > 0.25
-        )
-      ) {
+      if (viewportMetricsCommitAccumulatorRef.current >= 0.28) {
         viewportMetricsCommitAccumulatorRef.current = 0
-        setQuadrantViewportMetrics({
-          diameterPx: nextDiameter,
-          innerRadiusPct: nextInnerPct,
-        })
+        const prev = quadrantViewportMetricsRef.current
+        const diameterChanged = Math.abs(nextDiameter - prev.diameterPx) > 2.5
+        const innerChanged = Math.abs(nextInnerPct - prev.innerRadiusPct) > 0.75
+        if (diameterChanged || innerChanged) {
+          const nextMetrics = {
+            diameterPx: nextDiameter,
+            innerRadiusPct: nextInnerPct,
+          }
+          quadrantViewportMetricsRef.current = nextMetrics
+          setQuadrantViewportMetrics((state) => {
+            const stateDiameterChanged = Math.abs(nextMetrics.diameterPx - state.diameterPx) > 2.5
+            const stateInnerChanged = Math.abs(nextMetrics.innerRadiusPct - state.innerRadiusPct) > 0.75
+            return stateDiameterChanged || stateInnerChanged ? nextMetrics : state
+          })
+        }
       }
     } else {
       viewportMetricsCommitAccumulatorRef.current = 0
@@ -3694,6 +4031,7 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
             displayMode={architectureDisplayMode}
             renderOptions={architectureRenderOptions}
             summaryRef={architectureSummaryRef}
+            onSummaryUi={handleArchitectureSummaryUi}
             yCenter={ARCH_PROJECTION_CENTER_Y}
             layerGap={ARCH_PROJECTION_LAYER_GAP}
             tetherRadius={CYLINDER_TETHER_RADIUS}
@@ -4099,7 +4437,7 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
         />
       )}
 
-      <SceneToolbar
+      <MemoToolbarHud3D
         isOpen={isToolbarOpen}
         setIsOpen={setIsToolbarOpen}
         showQuadrantViewport={showQuadrantViewport}
@@ -4124,6 +4462,9 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
         setArchitectureDisplayMode={setArchitectureDisplayMode}
         architectureRenderOptions={architectureRenderOptions}
         setArchitectureRenderOptions={setArchitectureRenderOptions}
+        architectureSummary={architectureSummaryUi}
+        showBadges={showToolbarBadges}
+        setShowBadges={setShowToolbarBadges}
       />
 
       {/* Visual feedback: Grip mode indicators */}
