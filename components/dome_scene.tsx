@@ -2231,6 +2231,8 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   const [showConflictMeter, setShowConflictMeter] = useState(false)
   const [showPlasticityPanel, setShowPlasticityPanel] = useState(false)
   const [showLogStatus, setShowLogStatus] = useState(false)
+  // Archive substrate preview targets by default; keep feature available behind a flag.
+  const [showSubstrateTargets] = useState(false)
   const [showToolbarBadges, setShowToolbarBadges] = useState(false)
   const [architectureDisplayMode, setArchitectureDisplayMode] = useState<ArchitectureDisplayMode>("all")
   const [projectorLayoutProfile, setProjectorLayoutProfile] = useState<ProjectorLayoutProfileId>("circular")
@@ -4427,7 +4429,7 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
       )}
 
       {/* Quadrant substrate targets designated by angle space. */}
-      {quadrantSubstrateTargets.map((target) => (
+      {showSubstrateTargets && quadrantSubstrateTargets.map((target) => (
         <group
           key={target.meshTag}
           position={target.worldPosition}
@@ -4487,7 +4489,7 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
           })}
         </group>
       ))}
-      {quadrantInterstitialTargets.map((target) => {
+      {showSubstrateTargets && quadrantInterstitialTargets.map((target) => {
         const leftSalience = miniObjSalienceRef.current[target.leftQuadrantId] ?? (1 / MINI_OBJECT_COUNT)
         const rightSalience = miniObjSalienceRef.current[target.rightQuadrantId] ?? (1 / MINI_OBJECT_COUNT)
         const blendedSalience = (leftSalience + rightSalience) * 0.5
