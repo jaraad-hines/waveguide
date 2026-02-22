@@ -5,6 +5,8 @@ import { useFrame, useThree } from "@react-three/fiber"
 import * as THREE from "three"
 import { BristleSpec } from "./bristleLayout"
 
+const WAVEGUIDE_BRISTLE_NEGATIVE_HORIZONTAL_ROT_Z = Math.PI * 0.5
+
 const vertexShader = `
   varying vec2 vUv;
   varying vec3 vPosition;
@@ -243,7 +245,8 @@ function AnimatedBeam({
       const finalRotation = new THREE.Euler(
         THREE.MathUtils.lerp(swingRotation.x, flatRotation.x, transitionProgress),
         THREE.MathUtils.lerp(swingRotation.y, flatRotation.y, transitionProgress),
-        THREE.MathUtils.lerp(swingRotation.z, flatRotation.z, transitionProgress),
+        THREE.MathUtils.lerp(swingRotation.z, flatRotation.z, transitionProgress) +
+          WAVEGUIDE_BRISTLE_NEGATIVE_HORIZONTAL_ROT_Z,
       )
       meshRef.current.rotation.copy(finalRotation)
     }
