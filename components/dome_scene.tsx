@@ -855,7 +855,7 @@ type ArchitectureSimulationBundle = {
   native: RotaryArchitectureSimulation | null
 }
 
-type ArchitectureDisplayMode = "solution1" | "solution2" | "all"
+type ArchitectureDisplayMode = "none" | "solution1" | "solution2" | "all"
 type ArchitectureFocusMode = "normal" | "delta"
 
 type ArchitectureRenderOptions = {
@@ -863,6 +863,7 @@ type ArchitectureRenderOptions = {
   focusMode: ArchitectureFocusMode
   lockDominantPort: boolean
   showDiffOverlay: boolean
+  showAnchorOverlay: boolean
 }
 
 type ArchitectureSummary = {
@@ -992,6 +993,8 @@ function ArchitectureProjectionSpace({
   projectorRadius,
   projectorThetas,
   projectorLayoutProfile,
+  rigAnchorY,
+  rigAnchorGap,
 }: {
   simulationRef: MutableRef<ArchitectureSimulationBundle>
   miniObjSalienceRef: MutableRef<number[]>
@@ -1009,6 +1012,8 @@ function ArchitectureProjectionSpace({
   projectorRadius: number
   projectorThetas?: number[]
   projectorLayoutProfile: ProjectorLayoutProfileId
+  rigAnchorY: number
+  rigAnchorGap: number
 }) {
   const nodeMeshRefs = useRef<Record<string, THREE.Mesh | null>>({})
   const nodeMaterialRefs = useRef<Record<string, THREE.MeshBasicMaterial | null>>({})
@@ -1024,6 +1029,13 @@ function ArchitectureProjectionSpace({
   const nodeHistoryRef = useRef<Map<string, Array<{ t: number; v: number }>>>(new Map())
   const summaryCommitAccumulatorRef = useRef(0)
   const lastSummaryUiRef = useRef<ArchitectureSummary | null>(null)
+  const hoverPlaneRef = useRef<THREE.Mesh>(null)
+  const [hoveredMiniObjId, setHoveredMiniObjId] = useState<number | null>(null)
+
+  useEffect(() => {
+    // Reset to default "show all" whenever SIM mode flips.
+    setHoveredMiniObjId(null)
+  }, [simEnabled])
 
   const modePalette = useMemo(
     () => ({
@@ -1058,8 +1070,13 @@ function ArchitectureProjectionSpace({
         ? [allSpecs[0]]
         : displayMode === "solution2"
           ? [allSpecs[1]]
-          : allSpecs
+          : displayMode === "all"
+            ? allSpecs
+            : []
 
+    if (selected.length === 0) {
+      return []
+    }
     if (selected.length === 1) {
       return [{ ...selected[0], xOffset: 0, yOffset: 0 }]
     }
@@ -1086,6 +1103,16 @@ function ArchitectureProjectionSpace({
         return new THREE.Vector3(x * projectorRadius, y, z * projectorRadius)
       }),
     [miniObjectCount, projectorRadius, projectorY, projectorThetas, projectorLayoutProfile]
+  )
+
+  const rigAnchorPositions = useMemo(
+    () =>
+      Array.from({ length: miniObjectCount }, (_, index) => {
+        const [xNorm, yNorm, zNorm] = sampleProjectorPortPoint(index, miniObjectCount, projectorLayoutProfile)
+        const y = rigAnchorY + rigAnchorGap * 0.5 + yNorm * rigAnchorGap * PROJECTOR_LAYOUT_VERTICAL_GAIN_RIG
+        return new THREE.Vector3(xNorm * projectorRadius, y, zNorm * projectorRadius)
+      }),
+    [miniObjectCount, projectorLayoutProfile, projectorRadius, rigAnchorGap, rigAnchorY]
   )
 
   const nodeLayouts = useMemo(() => {
@@ -1130,6 +1157,15 @@ function ArchitectureProjectionSpace({
     }
     return layouts
   }, [profileSpecs, tetherRadius, yCenter])
+
+  const tierGuideRadii = useMemo(
+    () => ({
+      core: tetherRadius * 0.2,
+      sub: tetherRadius * 0.32,
+      detail: tetherRadius * 0.44,
+    }),
+    [tetherRadius]
+  )
 
   useFrame((_, delta) => {
     const now = performance.now()
@@ -1236,10 +1272,17 @@ function ArchitectureProjectionSpace({
       projector.visible = true
       const salience = miniObjSalienceRef.current[index] ?? (1 / Math.max(1, miniObjectCount))
       const isDominant = index === dominantPort
+      const hoverFilterActive = hoveredMiniObjId !== null
+      const isHovered = hoveredMiniObjId === index
       projector.position.copy(projectorPositions[index])
       const gain = (0.68 + salience * 1.8) * (isDominant ? 1.14 : 1) * (0.9 + 0.1 * pulseEnvelope)
       projector.scale.set(gain, gain, gain)
-      material.opacity = renderOptions.lockDominantPort && !isDominant ? 0.12 : 0.28 + Math.min(0.6, salience * 1.05)
+      material.opacity =
+        renderOptions.lockDominantPort && !isDominant
+          ? 0.12
+          : hoverFilterActive && !isHovered
+            ? 0.08
+            : 0.28 + Math.min(0.6, salience * 1.05)
       material.color.setRGB(0.92, 0.82 + salience * 0.16, 0.7 + salience * 0.26)
     }
 
@@ -1257,11 +1300,14 @@ function ArchitectureProjectionSpace({
       }
 
       const onDominantPort = entry.runtimeNode.miniObjId % Math.max(1, miniObjectCount) === dominantPort
+      const onHoveredPort =
+        hoveredMiniObjId === null ||
+        entry.runtimeNode.miniObjId % Math.max(1, miniObjectCount) === hoveredMiniObjId
       const deltaStrong = simEnabled ? Math.abs(entry.delta1s) > 0.012 : false
       const isTop = simEnabled ? topKeys.has(entry.layoutKey) : true
       // Always render all solution beams/nodes in active modes; keep lock as an optional narrow override.
       const visible = simEnabled
-        ? (!renderOptions.lockDominantPort || onDominantPort || entry.profileKey === "reference")
+        ? (!renderOptions.lockDominantPort || onDominantPort || entry.profileKey === "reference") && onHoveredPort
         : true
       nodeMesh.visible = visible
       beamMesh.visible = simEnabled && visible
@@ -1349,6 +1395,42 @@ function ArchitectureProjectionSpace({
 
   return (
     <group>
+      {simEnabled && (
+        <mesh
+          ref={hoverPlaneRef}
+          position={[0, yCenter, 0]}
+          rotation={[Math.PI * 0.5, 0, 0]}
+          onPointerMove={(event: any) => {
+            const plane = hoverPlaneRef.current
+            if (!plane || projectorPositions.length === 0) return
+            const local = plane.worldToLocal(event.point.clone())
+            let bestIndex = 0
+            let bestDistSq = Number.POSITIVE_INFINITY
+            for (let i = 0; i < projectorPositions.length; i += 1) {
+              const p = projectorPositions[i]
+              const dx = local.x - p.x
+              const dz = local.z - p.z
+              const distSq = dx * dx + dz * dz
+              if (distSq < bestDistSq) {
+                bestDistSq = distSq
+                bestIndex = i
+              }
+            }
+            setHoveredMiniObjId((prev) => (prev === bestIndex ? prev : bestIndex))
+          }}
+          onPointerLeave={() => {
+            setHoveredMiniObjId(null)
+          }}
+        >
+          <planeGeometry args={[projectorRadius * 2.8, projectorRadius * 2.8, 1, 1]} />
+          <meshBasicMaterial
+            transparent
+            opacity={0}
+            side={THREE.DoubleSide}
+            depthWrite={false}
+          />
+        </mesh>
+      )}
       {projectorPositions.map((position, index) => (
         <mesh
           key={`arch-projector-${index}`}
@@ -1386,6 +1468,75 @@ function ArchitectureProjectionSpace({
             depthWrite={false}
           />
         </mesh>
+      ))}
+      {renderOptions.showAnchorOverlay &&
+        Array.from({ length: miniObjectCount }, (_, index) => {
+          const from = rigAnchorPositions[index]
+          const to = projectorPositions[index]
+          if (!from || !to) return null
+          const direction = to.clone().sub(from)
+          const length = Math.max(0.001, direction.length())
+          const midpoint = from.clone().addScaledVector(direction, 0.5)
+          const isHovered = hoveredMiniObjId === index
+          const hoverFilterActive = hoveredMiniObjId !== null
+          const dimmed = hoverFilterActive && !isHovered
+          const radius = isHovered ? 0.025 : 0.016
+          return (
+            <group key={`arch-anchor-link-${index}`}>
+              <mesh
+                position={midpoint}
+                quaternion={new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize())}
+              >
+                <cylinderGeometry args={[radius, radius, length, 8]} />
+                <meshBasicMaterial
+                  color={new THREE.Color(0.86, 0.89, 0.98)}
+                  transparent
+                  opacity={dimmed ? 0.1 : isHovered ? 0.86 : 0.42}
+                  depthWrite={false}
+                  depthTest={false}
+                />
+              </mesh>
+              <mesh position={from}>
+                <sphereGeometry args={[isHovered ? 0.044 : 0.032, 12, 12]} />
+                <meshBasicMaterial
+                  color={new THREE.Color(0.9, 0.92, 1)}
+                  transparent
+                  opacity={dimmed ? 0.16 : isHovered ? 0.94 : 0.6}
+                  depthWrite={false}
+                  depthTest={false}
+                />
+              </mesh>
+            </group>
+          )
+        })}
+      {profileSpecs.map((spec) => (
+        <group key={`arch-tier-guides-${spec.id}`} position={[spec.xOffset, yCenter + spec.yOffset, 0]}>
+          {(["core", "sub", "detail"] as const).map((tier) => {
+            const r = tierGuideRadii[tier]
+            const bandThickness = tier === "core" ? 0.04 : tier === "sub" ? 0.032 : 0.026
+            const bandOpacity = tier === "core" ? 0.5 : tier === "sub" ? 0.4 : 0.32
+            const tierYOffset = tier === "core" ? 0 : tier === "sub" ? 0.045 : 0.09
+            const color = tierColor(tier).clone().lerp(new THREE.Color(1, 1, 1), 0.22)
+            return (
+              <mesh
+                key={`arch-tier-guide-${spec.id}-${tier}`}
+                position={[0, tierYOffset, 0]}
+                rotation={[Math.PI * 0.5, 0, 0]}
+                renderOrder={320}
+              >
+                <ringGeometry args={[Math.max(0.001, r - bandThickness), r + bandThickness, 96]} />
+                <meshBasicMaterial
+                  color={color}
+                  transparent
+                  opacity={bandOpacity}
+                  side={THREE.DoubleSide}
+                  depthWrite={false}
+                  depthTest={false}
+                />
+              </mesh>
+            )
+          })}
+        </group>
       ))}
       {nodeLayouts.map((layout) => (
         <group key={`arch-node-group-${layout.key}`}>
@@ -1976,6 +2127,10 @@ type ToolbarHud3DProps = {
   architectureSummary: ArchitectureSummary
   showBadges: boolean
   setShowBadges: (show: boolean) => void
+  showCylinderRig: boolean
+  setShowCylinderRig: (show: boolean) => void
+  showDomeObject: boolean
+  setShowDomeObject: (show: boolean) => void
 }
 
 function ToolbarHud3D({
@@ -2004,6 +2159,10 @@ function ToolbarHud3D({
   architectureSummary,
   showBadges,
   setShowBadges,
+  showCylinderRig,
+  setShowCylinderRig,
+  showDomeObject,
+  setShowDomeObject,
 }: ToolbarHud3DProps) {
   const rootRef = useRef<THREE.Group>(null)
   const ndcAnchorRef = useRef(new THREE.Vector3(TOOLBAR_HUD_VIEW_X, TOOLBAR_HUD_VIEW_Y, 0))
@@ -2035,22 +2194,23 @@ function ToolbarHud3D({
       {
         key: "K",
         label: `K${architectureRenderOptions.topKBeams}`,
-        active: true,
+        active: false,
         onClick: () => {
           const nextTopK = architectureRenderOptions.topKBeams >= 10 ? 6 : architectureRenderOptions.topKBeams + 2
           setArchitectureRenderOptions({ ...architectureRenderOptions, topKBeams: nextTopK })
         },
       },
       { key: "DG", label: "DG", active: isDockMode, onClick: onToggleDockMode },
-      { key: "BDG", label: "BDG", active: showBadges, onClick: () => setShowBadges(!showBadges) },
+      { key: "DOME", label: "DOME", active: showDomeObject, onClick: () => setShowDomeObject(!showDomeObject) },
+      { key: "RIG", label: "RIG", active: showCylinderRig, onClick: () => setShowCylinderRig(!showCylinderRig) },
       {
-        key: "DIFF",
-        label: "DIFF",
-        active: architectureRenderOptions.showDiffOverlay,
+        key: "ANC",
+        label: "ANC",
+        active: architectureRenderOptions.showAnchorOverlay,
         onClick: () =>
           setArchitectureRenderOptions({
             ...architectureRenderOptions,
-            showDiffOverlay: !architectureRenderOptions.showDiffOverlay,
+            showAnchorOverlay: !architectureRenderOptions.showAnchorOverlay,
           }),
       },
     ],
@@ -2069,6 +2229,8 @@ function ToolbarHud3D({
       setShowBadges,
       isDockMode,
       onToggleDockMode,
+      showDomeObject,
+      setShowDomeObject,
       architectureDisplayMode,
       setArchitectureDisplayMode,
       projectorLayoutProfile,
@@ -2077,6 +2239,8 @@ function ToolbarHud3D({
       setArchitectureSimEnabled,
       architectureRenderOptions,
       setArchitectureRenderOptions,
+      showCylinderRig,
+      setShowCylinderRig,
     ]
   )
 
@@ -2214,6 +2378,9 @@ const MemoToolbarHud3D = memo(
     prev.architectureRenderOptions.focusMode === next.architectureRenderOptions.focusMode &&
     prev.architectureRenderOptions.lockDominantPort === next.architectureRenderOptions.lockDominantPort &&
     prev.architectureRenderOptions.showDiffOverlay === next.architectureRenderOptions.showDiffOverlay &&
+    prev.architectureRenderOptions.showAnchorOverlay === next.architectureRenderOptions.showAnchorOverlay &&
+    prev.showCylinderRig === next.showCylinderRig &&
+    prev.showDomeObject === next.showDomeObject &&
     sameArchitectureSummary(prev.architectureSummary, next.architectureSummary)
 )
 
@@ -2234,14 +2401,17 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   // Archive substrate preview targets by default; keep feature available behind a flag.
   const [showSubstrateTargets] = useState(false)
   const [showToolbarBadges, setShowToolbarBadges] = useState(false)
-  const [architectureDisplayMode, setArchitectureDisplayMode] = useState<ArchitectureDisplayMode>("all")
+  const [showDomeObject, setShowDomeObject] = useState(false)
+  const [showCylinderRig, setShowCylinderRig] = useState(false)
+  const [architectureDisplayMode, setArchitectureDisplayMode] = useState<ArchitectureDisplayMode>("none")
   const [projectorLayoutProfile, setProjectorLayoutProfile] = useState<ProjectorLayoutProfileId>("circular")
-  const [architectureSimEnabled, setArchitectureSimEnabled] = useState(true)
+  const [architectureSimEnabled, setArchitectureSimEnabled] = useState(false)
   const [architectureRenderOptions, setArchitectureRenderOptions] = useState<ArchitectureRenderOptions>({
     topKBeams: 8,
     focusMode: "normal",
     lockDominantPort: false,
     showDiffOverlay: false,
+    showAnchorOverlay: true,
   })
   const [architectureSummaryUi, setArchitectureSummaryUi] = useState<ArchitectureSummary>({
     bandHigh: 0,
@@ -4187,6 +4357,9 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
     if (architectureDisplayMode === "solution2") {
       return [s2Grid1, s2Grid2, emptyGrid, emptyGrid]
     }
+    if (architectureDisplayMode === "none") {
+      return [emptyGrid, emptyGrid, emptyGrid, emptyGrid]
+    }
     return [s1Grid1, s1Grid2, s2Grid1, s2Grid2]
   }, [architectureDisplayMode])
   const verticalDirection: 1 | -1 = cameraMode === "top" ? 1 : -1
@@ -4215,39 +4388,43 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
       {/* Inverted architecture stack: dome + cylinder rig + mini-object projection + waveguide */}
       <group position={[0, Y_RIM, 0]} rotation={[Math.PI, 0, 0]}>
         {/* Dome hemisphere */}
-        <mesh
-          position={[0, domeCenterY - Y_RIM, 0]}
-          rotation={[0, 0, 0]}
-          scale={[DOME_RIM_OVERFILL_SCALE, 1, DOME_RIM_OVERFILL_SCALE]}
-        >
-          <sphereGeometry args={[domeRadius, 64, 64, 0, Math.PI * 2, 0, Math.PI / 2]} />
-          <meshBasicMaterial
-            color={domeColor}
-            side={THREE.BackSide}
-            wireframe={false}
-          />
-        </mesh>
+        {showDomeObject && (
+          <mesh
+            position={[0, domeCenterY - Y_RIM, 0]}
+            rotation={[0, 0, 0]}
+            scale={[DOME_RIM_OVERFILL_SCALE, 1, DOME_RIM_OVERFILL_SCALE]}
+          >
+            <sphereGeometry args={[domeRadius, 64, 64, 0, Math.PI * 2, 0, Math.PI / 2]} />
+            <meshBasicMaterial
+              color={domeColor}
+              side={THREE.BackSide}
+              wireframe={false}
+            />
+          </mesh>
+        )}
 
         {/* Waveguide Fields - Center field, vertical/upright orientation */}
         {centerField && (
           <group>
           <group rotation={[Math.PI, 0, 0]}>
-            <MemoCylinderRig
-              imagePath={centerField.imagePath}
-              yOffset={CYLINDER_Y_OFFSET + MINI_OBJECT_LAYER_Y_LIFT}
-              rotatorYOffset={CYLINDER_ROTATOR_Y_OFFSET + MINI_OBJECT_LAYER_Y_LIFT}
-              rigScale={CYLINDER_RIG_SCALE}
-              tetherRadius={PROJECTOR_RING_RADIUS}
-              tetherGap={CYLINDER_ROTATOR_GAP}
-              ringTargetCount={CYLINDER_RING_TARGET_COUNT}
-              thetaBandSnapshotsRef={thetaBandSnapshotsRef}
-              miniObjSalienceRef={miniObjSalienceRef}
-              activeBandIndexRef={activeThetaBandIndexRef}
-              onRingTargetEnterRef={onRingTargetEnterRef}
-              onRingTargetClickRef={onRingTargetClickRef}
-              onRingTargetLeaveRef={onRingTargetLeaveRef}
-              projectorLayoutProfile={projectorLayoutProfile}
-            />
+            {showCylinderRig && (
+              <MemoCylinderRig
+                imagePath={centerField.imagePath}
+                yOffset={CYLINDER_Y_OFFSET + MINI_OBJECT_LAYER_Y_LIFT}
+                rotatorYOffset={CYLINDER_ROTATOR_Y_OFFSET + MINI_OBJECT_LAYER_Y_LIFT}
+                rigScale={CYLINDER_RIG_SCALE}
+                tetherRadius={PROJECTOR_RING_RADIUS}
+                tetherGap={CYLINDER_ROTATOR_GAP}
+                ringTargetCount={CYLINDER_RING_TARGET_COUNT}
+                thetaBandSnapshotsRef={thetaBandSnapshotsRef}
+                miniObjSalienceRef={miniObjSalienceRef}
+                activeBandIndexRef={activeThetaBandIndexRef}
+                onRingTargetEnterRef={onRingTargetEnterRef}
+                onRingTargetClickRef={onRingTargetClickRef}
+                onRingTargetLeaveRef={onRingTargetLeaveRef}
+                projectorLayoutProfile={projectorLayoutProfile}
+              />
+            )}
           </group>
           <ArchitectureProjectionSpace
             simulationRef={architectureSimulationRef}
@@ -4266,6 +4443,8 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
             projectorRadius={PROJECTOR_RING_RADIUS}
             projectorThetas={miniObjectRoutingThetas}
             projectorLayoutProfile={projectorLayoutProfile}
+            rigAnchorY={CYLINDER_Y_OFFSET + MINI_OBJECT_LAYER_Y_LIFT}
+            rigAnchorGap={CYLINDER_ROTATOR_GAP}
           />
           <group scale={[WAVEGUIDE_SCALE_XZ, WAVEGUIDE_SCALE_Y, WAVEGUIDE_SCALE_XZ]}>
             <WaveguideField
@@ -4281,36 +4460,38 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
       </group>
 
       {/* Film-strip rim on lower-inner band */}
-      <group ref={bristleGroupRef} onDoubleClick={handleRimClick}>
-        {rimStrips.map((s) => (
-          <group
-            key={s.sourceIndex}
-            position={s.position}
-            rotation={[RIM_RING_INVERT_X, s.rotationY, 0]}
-            onClick={sceneRegime === "orbit" ? (e) => handleBristleClick(s.rimIndex, e) : undefined}
-            onPointerEnter={sceneRegime === "orbit" ? (e) => handleBristlePointerEnter(s.rimIndex, e) : undefined}
-            onPointerLeave={sceneRegime === "orbit" ? (e) => handleBristlePointerLeave(s.rimIndex, e) : undefined}
-          >
-            {/* Strip plane */}
-            <mesh geometry={stripGeometry} material={stripMaterial} />
-
-            {/* Bristle centered on strip, with scale + color from BristleSpec */}
-            <mesh
-              geometry={bristleGeometry}
-              position={[0, 0.05, 0]}
-              scale={[s.thicknessScale, s.lengthScale, s.thicknessScale]}
-              userData={{
-                bristleId: s.sourceIndex,
-                ringIndex: s.rimIndex,
-                theta: canonTheta(s.theta),
-                tensolId: getQuadrantIdForBristle(s.sourceIndex),
-              }}
+      {showCylinderRig && (
+        <group ref={bristleGroupRef} onDoubleClick={handleRimClick}>
+          {rimStrips.map((s) => (
+            <group
+              key={s.sourceIndex}
+              position={s.position}
+              rotation={[RIM_RING_INVERT_X, s.rotationY, 0]}
+              onClick={sceneRegime === "orbit" ? (e) => handleBristleClick(s.rimIndex, e) : undefined}
+              onPointerEnter={sceneRegime === "orbit" ? (e) => handleBristlePointerEnter(s.rimIndex, e) : undefined}
+              onPointerLeave={sceneRegime === "orbit" ? (e) => handleBristlePointerLeave(s.rimIndex, e) : undefined}
             >
-              <meshBasicMaterial color={s.color} />
-            </mesh>
-          </group>
-        ))}
-      </group>
+              {/* Strip plane */}
+              <mesh geometry={stripGeometry} material={stripMaterial} />
+
+              {/* Bristle centered on strip, with scale + color from BristleSpec */}
+              <mesh
+                geometry={bristleGeometry}
+                position={[0, 0.05, 0]}
+                scale={[s.thicknessScale, s.lengthScale, s.thicknessScale]}
+                userData={{
+                  bristleId: s.sourceIndex,
+                  ringIndex: s.rimIndex,
+                  theta: canonTheta(s.theta),
+                  tensolId: getQuadrantIdForBristle(s.sourceIndex),
+                }}
+              >
+                <meshBasicMaterial color={s.color} />
+              </mesh>
+            </group>
+          ))}
+        </group>
+      )}
 
       {sceneRegime === "dock" && (
         <group position={dockAnchor.center} quaternion={dockAnchor.quaternion}>
@@ -4730,6 +4911,10 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
         architectureSummary={architectureSummaryUi}
         showBadges={showToolbarBadges}
         setShowBadges={setShowToolbarBadges}
+        showDomeObject={showDomeObject}
+        setShowDomeObject={setShowDomeObject}
+        showCylinderRig={showCylinderRig}
+        setShowCylinderRig={setShowCylinderRig}
       />
 
       {/* Visual feedback: Grip mode indicators */}
