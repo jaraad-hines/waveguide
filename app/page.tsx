@@ -5,6 +5,7 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber"
 import { OrbitControls, Html } from "@react-three/drei"
 import WaveguideField from "../components/waveguide_field"
 import DomeScene from "../components/dome_scene"
+import AnalysisWorkbench from "../components/analysis_workbench"
 import { createWaveguideBristles } from "../components/bristleLayout"
 import * as THREE from "three"
 
@@ -620,6 +621,7 @@ function HUDOverlayPhone({ fieldPosition, text, isActive }: { fieldPosition: THR
 }
 
 export default function Page() {
+  const [appMode, setAppMode] = useState<"spatial" | "workbench">("workbench")
   const [selectedIndex, setSelectedIndex] = useState(2) // 0: green, 1: purple, 2: center, 3: blue, 4: orange
   const [insideViewIndex, setInsideViewIndex] = useState<number | null>(null) // Track which field is in inside view mode
   const [hudText, setHudText] = useState("") // Text displayed in HUD
@@ -778,8 +780,45 @@ export default function Page() {
   const normalizedPosition = selectedFieldX / 30 // -1 to 1
   const hudOffsetX = normalizedPosition * 30 // Scale to percentage offset
 
+  if (appMode === "workbench") {
+    return (
+      <AnalysisWorkbench
+        onOpenSpatial={() => {
+          setAppMode("spatial")
+          setIsDomeScene(true)
+        }}
+      />
+    )
+  }
+
   return (
-    <div className="w-full h-screen bg-black">
+    <div className="w-full h-screen bg-black" style={{ position: "relative" }}>
+      <div
+        style={{
+          position: "fixed",
+          top: "14px",
+          left: "14px",
+          zIndex: 20,
+          display: "flex",
+          gap: "8px",
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => setAppMode("workbench")}
+          style={{
+            borderRadius: "999px",
+            border: "1px solid rgba(255,255,255,0.12)",
+            background: "rgba(11,15,22,0.76)",
+            color: "rgba(245,245,245,0.95)",
+            padding: "10px 14px",
+            cursor: "pointer",
+            backdropFilter: "blur(8px)",
+          }}
+        >
+          Analysis Workbench
+        </button>
+      </div>
       <Canvas camera={{ position: [0, 1, 20], fov: 60, near: 0.1, far: 200 }} gl={{ antialias: true, alpha: false }}>
         {/* Ambient light for HUD ridge */}
         <ambientLight intensity={0.5} />

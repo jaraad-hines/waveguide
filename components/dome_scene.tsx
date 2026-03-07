@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useMemo, useRef, useState, useEffect, useCallback, Suspense, type CSSProperties } from "react"
+import { memo, useMemo, useRef, useState, useEffect, useCallback, Suspense, type CSSProperties, type Dispatch, type SetStateAction } from "react"
 import { useFrame, useThree } from "@react-three/fiber"
 import { Html, Text } from "@react-three/drei"
 import * as THREE from "three"
@@ -117,7 +117,7 @@ const LOG_API_FLUSH_INTERVAL_SEC = 3
 
 type HandPoint2D = [number, number]
 type LayoutPoint3D = [number, number, number]
-type ProjectorLayoutProfileId = "circular" | "hand" | "stacked_sculpture"
+type ProjectorLayoutProfileId = "circular" | "hand" | "stacked_sculpture" | "s5_car_bud"
 type LayoutSlice = {
   yNorm: number
   outline: HandPoint2D[]
@@ -152,6 +152,37 @@ const HAND_OUTLINE: HandPoint2D[] = [
   [0.54, -0.62],
   [0.2, -0.84],
   [-0.2, -0.88],
+]
+
+const S5_CAR_BUD_PORT_LAYOUT_6: LayoutPoint3D[] = [
+  [-0.78, -0.1, -0.08], // rear wheel
+  [-0.36, -0.12, -0.08], // front wheel
+  [-0.58, 0.12, 0.06], // cabin
+  [-0.22, 0.08, 0.02], // hood
+  [0.42, 0.3, 0.1], // bud center
+  [0.62, 0.12, 0.14], // bud petal
+]
+
+const S5_CAR_BUD_OUTLINE: HandPoint2D[] = [
+  [-0.95, -0.25],
+  [-0.82, -0.34],
+  [-0.58, -0.36],
+  [-0.3, -0.34],
+  [-0.1, -0.25],
+  [-0.04, -0.08],
+  [-0.14, 0.08],
+  [-0.34, 0.18],
+  [-0.54, 0.2],
+  [-0.72, 0.14],
+  [-0.9, 0.02],
+  [-0.95, -0.12],
+  [0.22, 0.08],
+  [0.38, 0.42],
+  [0.62, 0.48],
+  [0.78, 0.3],
+  [0.72, 0.04],
+  [0.52, -0.04],
+  [0.34, -0.02],
 ]
 
 function toCircularXZ(index: number, count: number): HandPoint2D {
@@ -222,6 +253,11 @@ const PROJECTOR_LAYOUT_PROFILES: Record<LayoutProfile["id"], LayoutProfile> = {
         ],
       },
     ],
+  },
+  s5_car_bud: {
+    id: "s5_car_bud",
+    ports: S5_CAR_BUD_PORT_LAYOUT_6,
+    slices: [{ yNorm: 0, outline: S5_CAR_BUD_OUTLINE }],
   },
 }
 
@@ -876,11 +912,296 @@ type ArchitectureSummary = {
   confidence: number
 }
 
+type SolutionScope = "focused" | "comparative" | "platform"
+type InputPattern = "manual" | "guided" | "imported"
+type LogicPattern = "rules" | "hybrid" | "adaptive"
+type OutputPattern = "brief" | "workspace" | "automation"
+type ValidationPattern = "light" | "review" | "strict"
+type CollaborationPattern = "solo" | "shared" | "gated"
+type DeploymentPattern = "draft" | "staged" | "live"
+type SolutionStage = "define" | "structure" | "validate" | "compose" | "launch"
+
+type SolutionBuilderState = {
+  scope: SolutionScope
+  inputPattern: InputPattern
+  logicPattern: LogicPattern
+  outputPattern: OutputPattern
+  validationPattern: ValidationPattern
+  collaborationPattern: CollaborationPattern
+  deploymentPattern: DeploymentPattern
+  stage: SolutionStage
+}
+
+const DEFAULT_SOLUTION_BUILDER_STATE: SolutionBuilderState = {
+  scope: "comparative",
+  inputPattern: "guided",
+  logicPattern: "hybrid",
+  outputPattern: "workspace",
+  validationPattern: "review",
+  collaborationPattern: "gated",
+  deploymentPattern: "staged",
+  stage: "define",
+}
+
 type BristleGlyphPoint = {
   x: number
   y: number
   z: number
   h: number
+}
+
+function describeComparativeMode(mode: ArchitectureDisplayMode) {
+  if (mode === "solution1") return "Comparing against Solution 1"
+  if (mode === "solution2") return "Comparing against Solution 2"
+  if (mode === "all") return "Comparing across both solutions"
+  return "Comparative system idle"
+}
+
+function buildSolutionBlueprint(
+  builder: SolutionBuilderState,
+  architectureSummary: ArchitectureSummary,
+  architectureDisplayMode: ArchitectureDisplayMode
+) {
+  const scopeLine =
+    builder.scope === "focused"
+      ? "Scope is focused: optimize one bounded solution path before expanding into alternatives or platform layers."
+      : builder.scope === "platform"
+        ? "Scope is platform-level: define reusable primitives that can support multiple downstream solutions."
+        : "Scope is comparative: keep options side-by-side so tradeoffs stay visible while the system is being composed."
+
+  const inputLine =
+    builder.inputPattern === "manual"
+      ? "Input mode is manual: expose direct controls so a user can shape the solution without assumptions."
+      : builder.inputPattern === "imported"
+        ? "Input mode is imported: prioritize external data, source ingestion, and normalization before composition."
+        : "Input mode is guided: use structured prompts and staged questions to gather only the inputs required for progress."
+
+  const logicLine =
+    builder.logicPattern === "rules"
+      ? "Logic mode is rules-first: deterministic choices, explicit thresholds, and clear branching dominate the flow."
+      : builder.logicPattern === "adaptive"
+        ? "Logic mode is adaptive: the system should react to changing signals, confidence shifts, and learned patterns."
+        : "Logic mode is hybrid: combine fixed guardrails with adaptive behaviors so the solution can stay legible while evolving."
+
+  const outputLine =
+    builder.outputPattern === "brief"
+      ? "Output mode is brief: produce a concise recommendation or summary artifact."
+      : builder.outputPattern === "automation"
+        ? "Output mode is automation: emit actions, tasks, or machine-executable objects that move the workflow forward."
+        : "Output mode is workspace: render a structured working surface where decisions, artifacts, and next actions stay visible."
+
+  const validationLine =
+    builder.validationPattern === "light"
+      ? "Validation is light-touch: minimal checks, fast iteration, and low-friction experimentation."
+      : builder.validationPattern === "strict"
+        ? "Validation is strict: gate transitions with formal checks, explicit criteria, and strong auditability."
+        : "Validation is review-based: add checkpoints where users or operators confirm assumptions before advancing."
+
+  const collaborationLine =
+    builder.collaborationPattern === "solo"
+      ? "Collaboration is solo: optimize for one operator moving quickly with local control."
+      : builder.collaborationPattern === "shared"
+        ? "Collaboration is shared: multiple contributors can shape the solution concurrently."
+        : "Collaboration is gated: permissions, invitations, or approvals control who can modify or advance the solution."
+
+  const deploymentLine =
+    builder.deploymentPattern === "draft"
+      ? "Deployment target is draft: keep the system in planning mode with reversible decisions and no live effects."
+      : builder.deploymentPattern === "live"
+        ? "Deployment target is live: the workflow should be ready to execute real actions, not just propose them."
+        : "Deployment target is staged: move through preview, review, and release checkpoints before going live."
+
+  const stageLine =
+    builder.stage === "define"
+      ? "Current build stage is define: establish the objective, constraints, and success criteria."
+      : builder.stage === "structure"
+        ? "Current build stage is structure: assemble the components, states, and transitions that the solution needs."
+        : builder.stage === "validate"
+          ? "Current build stage is validate: test assumptions, resolve edge cases, and tighten decision rules."
+          : builder.stage === "compose"
+            ? "Current build stage is compose: connect the chosen primitives into a coherent working flow."
+            : "Current build stage is launch: prepare the handoff from designed workflow to active operation."
+
+  const confidenceLine = `Comparative guidance: ${describeComparativeMode(architectureDisplayMode)}. Current dominant port is P${architectureSummary.dominantPort + 1} with ${(architectureSummary.confidence * 100).toFixed(0)}% confidence and H/M/L ${architectureSummary.bandHigh}/${architectureSummary.bandMedium}/${architectureSummary.bandLow}.`
+
+  return [scopeLine, inputLine, logicLine, outputLine, validationLine, collaborationLine, deploymentLine, stageLine, confidenceLine]
+}
+
+function SolutionBuilderPanel({
+  visible,
+  builder,
+  setBuilder,
+  architectureSummary,
+  architectureDisplayMode,
+  domeRadius,
+  verticalDirection,
+}: {
+  visible: boolean
+  builder: SolutionBuilderState
+  setBuilder: Dispatch<SetStateAction<SolutionBuilderState>>
+  architectureSummary: ArchitectureSummary
+  architectureDisplayMode: ArchitectureDisplayMode
+  domeRadius: number
+  verticalDirection: 1 | -1
+}) {
+  const updateField = <K extends keyof SolutionBuilderState>(key: K, value: SolutionBuilderState[K]) => {
+    setBuilder((prev) => ({ ...prev, [key]: value }))
+  }
+
+  const pillStyle = (active: boolean): CSSProperties => ({
+    border: active ? "1px solid rgba(255,190,120,0.9)" : "1px solid rgba(255,255,255,0.14)",
+    background: active ? "rgba(186,94,34,0.34)" : "rgba(19,23,30,0.78)",
+    color: "rgba(244,240,232,0.96)",
+    borderRadius: "999px",
+    padding: "6px 10px",
+    fontSize: "11px",
+    lineHeight: 1.2,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  })
+
+  const sectionLabelStyle: CSSProperties = {
+    fontSize: "11px",
+    fontWeight: 700,
+    letterSpacing: "0.04em",
+    textTransform: "uppercase",
+    color: "rgba(255,214,178,0.92)",
+  }
+
+  const blueprint = useMemo(
+    () => buildSolutionBlueprint(builder, architectureSummary, architectureDisplayMode),
+    [builder, architectureSummary, architectureDisplayMode]
+  )
+
+  if (!visible) return null
+
+  return (
+    <Html position={[domeRadius * 0.58, domeRadius * 0.1 * verticalDirection, 0]} occlude={false}>
+      <div
+        style={{
+          width: "min(420px, 46vw)",
+          maxHeight: "70vh",
+          overflowY: "auto",
+          borderRadius: "18px",
+          border: "1px solid rgba(255,255,255,0.18)",
+          background: "linear-gradient(180deg, rgba(18,22,30,0.96), rgba(11,13,20,0.98))",
+          boxShadow: "0 18px 44px rgba(0,0,0,0.42)",
+          padding: "14px",
+          color: "rgba(244,240,232,0.96)",
+          fontFamily: "'Consolas', 'Courier New', monospace",
+          pointerEvents: "auto",
+        }}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "12px" }}>
+          <div style={{ fontSize: "12px", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+            Solution Composer
+          </div>
+          <div style={{ fontSize: "11px", color: "rgba(214,218,228,0.84)", lineHeight: 1.45 }}>
+            Agnostic composition primitives for building any solution from the current comparative analysis system.
+          </div>
+          <div style={{ fontSize: "10px", color: "rgba(255,214,178,0.88)", lineHeight: 1.45 }}>
+            {describeComparativeMode(architectureDisplayMode)} | Dominant Port P{architectureSummary.dominantPort + 1} | Conf {(architectureSummary.confidence * 100).toFixed(0)}%
+          </div>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "7px" }}>
+            <div style={sectionLabelStyle}>Scope</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+              <button type="button" onClick={() => updateField("scope", "focused")} style={pillStyle(builder.scope === "focused")}>Focused</button>
+              <button type="button" onClick={() => updateField("scope", "comparative")} style={pillStyle(builder.scope === "comparative")}>Comparative</button>
+              <button type="button" onClick={() => updateField("scope", "platform")} style={pillStyle(builder.scope === "platform")}>Platform</button>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "7px" }}>
+            <div style={sectionLabelStyle}>Inputs</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+              <button type="button" onClick={() => updateField("inputPattern", "manual")} style={pillStyle(builder.inputPattern === "manual")}>Manual</button>
+              <button type="button" onClick={() => updateField("inputPattern", "guided")} style={pillStyle(builder.inputPattern === "guided")}>Guided</button>
+              <button type="button" onClick={() => updateField("inputPattern", "imported")} style={pillStyle(builder.inputPattern === "imported")}>Imported</button>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "7px" }}>
+            <div style={sectionLabelStyle}>Logic</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+              <button type="button" onClick={() => updateField("logicPattern", "rules")} style={pillStyle(builder.logicPattern === "rules")}>Rules</button>
+              <button type="button" onClick={() => updateField("logicPattern", "hybrid")} style={pillStyle(builder.logicPattern === "hybrid")}>Hybrid</button>
+              <button type="button" onClick={() => updateField("logicPattern", "adaptive")} style={pillStyle(builder.logicPattern === "adaptive")}>Adaptive</button>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "7px" }}>
+            <div style={sectionLabelStyle}>Outputs</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+              <button type="button" onClick={() => updateField("outputPattern", "brief")} style={pillStyle(builder.outputPattern === "brief")}>Brief</button>
+              <button type="button" onClick={() => updateField("outputPattern", "workspace")} style={pillStyle(builder.outputPattern === "workspace")}>Workspace</button>
+              <button type="button" onClick={() => updateField("outputPattern", "automation")} style={pillStyle(builder.outputPattern === "automation")}>Automation</button>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "7px" }}>
+            <div style={sectionLabelStyle}>Validation</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+              <button type="button" onClick={() => updateField("validationPattern", "light")} style={pillStyle(builder.validationPattern === "light")}>Light</button>
+              <button type="button" onClick={() => updateField("validationPattern", "review")} style={pillStyle(builder.validationPattern === "review")}>Review</button>
+              <button type="button" onClick={() => updateField("validationPattern", "strict")} style={pillStyle(builder.validationPattern === "strict")}>Strict</button>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "7px" }}>
+            <div style={sectionLabelStyle}>Collaboration</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+              <button type="button" onClick={() => updateField("collaborationPattern", "solo")} style={pillStyle(builder.collaborationPattern === "solo")}>Solo</button>
+              <button type="button" onClick={() => updateField("collaborationPattern", "shared")} style={pillStyle(builder.collaborationPattern === "shared")}>Shared</button>
+              <button type="button" onClick={() => updateField("collaborationPattern", "gated")} style={pillStyle(builder.collaborationPattern === "gated")}>Gated</button>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "7px" }}>
+            <div style={sectionLabelStyle}>Deployment</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+              <button type="button" onClick={() => updateField("deploymentPattern", "draft")} style={pillStyle(builder.deploymentPattern === "draft")}>Draft</button>
+              <button type="button" onClick={() => updateField("deploymentPattern", "staged")} style={pillStyle(builder.deploymentPattern === "staged")}>Staged</button>
+              <button type="button" onClick={() => updateField("deploymentPattern", "live")} style={pillStyle(builder.deploymentPattern === "live")}>Live</button>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "7px" }}>
+            <div style={sectionLabelStyle}>Stage</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+              <button type="button" onClick={() => updateField("stage", "define")} style={pillStyle(builder.stage === "define")}>Define</button>
+              <button type="button" onClick={() => updateField("stage", "structure")} style={pillStyle(builder.stage === "structure")}>Structure</button>
+              <button type="button" onClick={() => updateField("stage", "validate")} style={pillStyle(builder.stage === "validate")}>Validate</button>
+              <button type="button" onClick={() => updateField("stage", "compose")} style={pillStyle(builder.stage === "compose")}>Compose</button>
+              <button type="button" onClick={() => updateField("stage", "launch")} style={pillStyle(builder.stage === "launch")}>Launch</button>
+            </div>
+          </div>
+        </div>
+
+        <div
+          style={{
+            marginTop: "14px",
+            borderRadius: "14px",
+            border: "1px solid rgba(255,255,255,0.1)",
+            background: "rgba(255,255,255,0.04)",
+            padding: "12px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "7px",
+          }}
+        >
+          <div style={sectionLabelStyle}>Generated Blueprint</div>
+          {blueprint.map((line, index) => (
+            <div key={`solution-blueprint-${index}`} style={{ fontSize: "11px", lineHeight: 1.45, color: "rgba(236,236,236,0.9)" }}>
+              {index + 1}. {line}
+            </div>
+          ))}
+        </div>
+      </div>
+    </Html>
+  )
 }
 
 function BristleTextPanel({
@@ -968,6 +1289,178 @@ function BristleTextPanel({
   if (points.length === 0) return null
 
   return <instancedMesh ref={instRef} args={[geometry, material, points.length]} />
+}
+
+function MindDirectionLogo2D() {
+  return (
+    <Html fullscreen style={{ pointerEvents: "none" }}>
+      <div
+        style={{
+          position: "absolute",
+          top: "20px",
+          right: "20px",
+          width: "220px",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          userSelect: "none",
+        }}
+      >
+        <svg viewBox="0 0 220 140" width="220" height="140" aria-label="Mind Direction Lab logo">
+          <defs>
+            <filter id="mdlGlow2d" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="1.1" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+          <g filter="url(#mdlGlow2d)" stroke="#f6f8fb" fill="none" strokeLinecap="round" strokeLinejoin="round">
+            {/* Flower bud mark */}
+            <ellipse cx="169" cy="40" rx="11" ry="17" strokeWidth="2.8" />
+            <ellipse cx="182" cy="53" rx="9" ry="13" strokeWidth="2.5" />
+            <ellipse cx="153" cy="57" rx="8" ry="12" strokeWidth="2.3" />
+            {/* Left-facing car imprint */}
+            <path
+              d="M104 88 L60 88 C55 88 51 84 51 79 L51 67 C51 62 55 58 60 58 L81 58 C87 58 92 55 97 50 L104 43 L120 43 C125 43 129 47 129 52 L129 79 C129 84 125 88 120 88 Z"
+              strokeWidth="3.2"
+            />
+            <path d="M93 58 L75 58 L70 70 L93 70" strokeWidth="2.4" />
+            <circle cx="68" cy="90" r="9.5" strokeWidth="3" />
+            <circle cx="112" cy="90" r="9.5" strokeWidth="3" />
+            <circle cx="68" cy="90" r="3.2" strokeWidth="2" />
+            <circle cx="112" cy="90" r="3.2" strokeWidth="2" />
+            <path d="M54 76 L48 80" strokeWidth="3" />
+          </g>
+        </svg>
+      </div>
+    </Html>
+  )
+}
+
+function MindDirectionLogo3D({ position = [0, 0, 0] as [number, number, number] }) {
+  const mapX = useCallback((x: number) => (x - 110) / 110 * 0.58, [])
+  const mapY = useCallback((y: number) => (70 - y) / 70 * 0.32, [])
+
+  const petalShapes = useMemo(() => {
+    const makePetal = (cx: number, cy: number, rx: number, ry: number) => {
+      const shape = new THREE.Shape()
+      shape.absellipse(mapX(cx), mapY(cy), rx / 110 * 0.58, ry / 70 * 0.32, 0, Math.PI * 2, false, 0)
+      return shape
+    }
+    return [
+      makePetal(169, 40, 11, 17),
+      makePetal(182, 53, 9, 13),
+      makePetal(153, 57, 8, 12),
+    ]
+  }, [mapX, mapY])
+
+  const carBodyShape = useMemo(() => {
+    const shape = new THREE.Shape()
+    shape.moveTo(mapX(104), mapY(88))
+    shape.lineTo(mapX(60), mapY(88))
+    shape.bezierCurveTo(mapX(55), mapY(88), mapX(51), mapY(84), mapX(51), mapY(79))
+    shape.lineTo(mapX(51), mapY(67))
+    shape.bezierCurveTo(mapX(51), mapY(62), mapX(55), mapY(58), mapX(60), mapY(58))
+    shape.lineTo(mapX(81), mapY(58))
+    shape.bezierCurveTo(mapX(87), mapY(58), mapX(92), mapY(55), mapX(97), mapY(50))
+    shape.lineTo(mapX(104), mapY(43))
+    shape.lineTo(mapX(120), mapY(43))
+    shape.bezierCurveTo(mapX(125), mapY(43), mapX(129), mapY(47), mapX(129), mapY(52))
+    shape.lineTo(mapX(129), mapY(79))
+    shape.bezierCurveTo(mapX(129), mapY(84), mapX(125), mapY(88), mapX(120), mapY(88))
+    shape.lineTo(mapX(104), mapY(88))
+    shape.closePath()
+    return shape
+  }, [mapX, mapY])
+
+  const carCabinShape = useMemo(() => {
+    const shape = new THREE.Shape()
+    shape.moveTo(mapX(93), mapY(58))
+    shape.lineTo(mapX(75), mapY(58))
+    shape.lineTo(mapX(70), mapY(70))
+    shape.lineTo(mapX(93), mapY(70))
+    shape.closePath()
+    return shape
+  }, [mapX, mapY])
+
+  const extrudeSettings = useMemo(
+    () => ({ depth: 0.055, bevelEnabled: true, bevelSize: 0.004, bevelThickness: 0.004, bevelSegments: 2 }),
+    []
+  )
+
+  return (
+    <group position={position}>
+      {petalShapes.map((shape, index) => (
+        <mesh key={`mdl-petal-3d-${index}`} position={[0, 0, 0.004 + index * 0.006]}>
+          <extrudeGeometry args={[shape, extrudeSettings]} />
+          <meshStandardMaterial
+            color={new THREE.Color(0.96, 0.97, 1)}
+            emissive={new THREE.Color(0.34, 0.38, 0.5)}
+            emissiveIntensity={0.36}
+            metalness={0.12}
+            roughness={0.26}
+          />
+        </mesh>
+      ))}
+      <mesh position={[0, 0, 0]}>
+        <extrudeGeometry args={[carBodyShape, { ...extrudeSettings, depth: 0.065 }]} />
+        <meshStandardMaterial
+          color={new THREE.Color(0.15, 0.17, 0.21)}
+          emissive={new THREE.Color(0.15, 0.18, 0.26)}
+          emissiveIntensity={0.28}
+          metalness={0.3}
+          roughness={0.48}
+        />
+      </mesh>
+      <mesh position={[0, 0, 0.07]}>
+        <extrudeGeometry args={[carCabinShape, { ...extrudeSettings, depth: 0.024, bevelSize: 0.0025, bevelThickness: 0.0025 }]} />
+        <meshStandardMaterial color={new THREE.Color(0.58, 0.68, 0.84)} transparent opacity={0.6} metalness={0.1} roughness={0.18} />
+      </mesh>
+      <group position={[0, 0, 0.04]}>
+        <mesh position={[mapX(68), mapY(90), 0]} rotation={[Math.PI * 0.5, 0, 0]}>
+          <cylinderGeometry args={[0.052, 0.052, 0.03, 28]} />
+          <meshStandardMaterial color={new THREE.Color(0.07, 0.07, 0.08)} />
+        </mesh>
+        <mesh position={[mapX(112), mapY(90), 0]} rotation={[Math.PI * 0.5, 0, 0]}>
+          <cylinderGeometry args={[0.052, 0.052, 0.03, 28]} />
+          <meshStandardMaterial color={new THREE.Color(0.07, 0.07, 0.08)} />
+        </mesh>
+        <mesh position={[mapX(68), mapY(90), 0.01]} rotation={[Math.PI * 0.5, 0, 0]}>
+          <cylinderGeometry args={[0.021, 0.021, 0.034, 20]} />
+          <meshStandardMaterial color={new THREE.Color(0.47, 0.5, 0.57)} />
+        </mesh>
+        <mesh position={[mapX(112), mapY(90), 0.01]} rotation={[Math.PI * 0.5, 0, 0]}>
+          <cylinderGeometry args={[0.021, 0.021, 0.034, 20]} />
+          <meshStandardMaterial color={new THREE.Color(0.47, 0.5, 0.57)} />
+        </mesh>
+      </group>
+    </group>
+  )
+}
+
+function MindDirectionLogo3DHud() {
+  const rootRef = useRef<THREE.Group>(null)
+  const ndcAnchorRef = useRef(new THREE.Vector3(-0.86, 0.82, 0))
+  const worldAnchorRef = useRef(new THREE.Vector3())
+  const viewDirRef = useRef(new THREE.Vector3())
+  const { camera } = useThree()
+
+  useFrame(() => {
+    if (!rootRef.current) return
+    worldAnchorRef.current.copy(ndcAnchorRef.current).unproject(camera)
+    viewDirRef.current.copy(worldAnchorRef.current).sub(camera.position).normalize()
+    rootRef.current.position.copy(camera.position).addScaledVector(viewDirRef.current, 2.18)
+    rootRef.current.quaternion.copy(camera.quaternion)
+    rootRef.current.scale.setScalar(0.78)
+  })
+
+  return (
+    <group ref={rootRef} renderOrder={2400}>
+      <MindDirectionLogo3D position={[0, 0, 0]} />
+    </group>
+  )
 }
 
 function tierColor(tier: "core" | "sub" | "detail") {
@@ -1114,6 +1607,61 @@ function ArchitectureProjectionSpace({
       }),
     [miniObjectCount, projectorLayoutProfile, projectorRadius, rigAnchorGap, rigAnchorY]
   )
+
+  const ancTargetPositions = useMemo(
+    () =>
+      projectorPositions.map((position) =>
+        projectorLayoutProfile === "s5_car_bud"
+          ? new THREE.Vector3(position.x, yCenter + 0.012, position.z)
+          : position
+      ),
+    [projectorLayoutProfile, projectorPositions, yCenter]
+  )
+
+  const s5Projection = useMemo(() => {
+    if (projectorLayoutProfile !== "s5_car_bud") return null
+    const xScale = tetherRadius * 0.96
+    const yScale = tetherRadius * 0.62
+    const map = (x: number, y: number) =>
+      new THREE.Vector2(((x - 110) / 110) * xScale, ((70 - y) / 70) * yScale)
+
+    const body = new THREE.Shape()
+    body.moveTo(map(104, 88).x, map(104, 88).y)
+    body.lineTo(map(60, 88).x, map(60, 88).y)
+    body.bezierCurveTo(map(55, 88).x, map(55, 88).y, map(51, 84).x, map(51, 84).y, map(51, 79).x, map(51, 79).y)
+    body.lineTo(map(51, 67).x, map(51, 67).y)
+    body.bezierCurveTo(map(51, 62).x, map(51, 62).y, map(55, 58).x, map(55, 58).y, map(60, 58).x, map(60, 58).y)
+    body.lineTo(map(81, 58).x, map(81, 58).y)
+    body.bezierCurveTo(map(87, 58).x, map(87, 58).y, map(92, 55).x, map(92, 55).y, map(97, 50).x, map(97, 50).y)
+    body.lineTo(map(104, 43).x, map(104, 43).y)
+    body.lineTo(map(120, 43).x, map(120, 43).y)
+    body.bezierCurveTo(map(125, 43).x, map(125, 43).y, map(129, 47).x, map(129, 47).y, map(129, 52).x, map(129, 52).y)
+    body.lineTo(map(129, 79).x, map(129, 79).y)
+    body.bezierCurveTo(map(129, 84).x, map(129, 84).y, map(125, 88).x, map(125, 88).y, map(120, 88).x, map(120, 88).y)
+    body.lineTo(map(104, 88).x, map(104, 88).y)
+    body.closePath()
+
+    const cabin = new THREE.Shape()
+    cabin.moveTo(map(93, 58).x, map(93, 58).y)
+    cabin.lineTo(map(75, 58).x, map(75, 58).y)
+    cabin.lineTo(map(70, 70).x, map(70, 70).y)
+    cabin.lineTo(map(93, 70).x, map(93, 70).y)
+    cabin.closePath()
+
+    const petals = [
+      { cx: map(169, 40).x, cy: map(169, 40).y, rx: (11 / 110) * xScale, ry: (17 / 70) * yScale },
+      { cx: map(182, 53).x, cy: map(182, 53).y, rx: (9 / 110) * xScale, ry: (13 / 70) * yScale },
+      { cx: map(153, 57).x, cy: map(153, 57).y, rx: (8 / 110) * xScale, ry: (12 / 70) * yScale },
+    ]
+
+    const wheels = [
+      { cx: map(68, 90).x, cy: map(68, 90).y, r: Math.min(xScale, yScale) * 0.095 },
+      { cx: map(112, 90).x, cy: map(112, 90).y, r: Math.min(xScale, yScale) * 0.095 },
+    ]
+
+    const baseY = Math.min(...wheels.map((wheel) => wheel.cy - wheel.r))
+    return { body, cabin, petals, wheels, baseYOffset: -baseY }
+  }, [projectorLayoutProfile, tetherRadius])
 
   const nodeLayouts = useMemo(() => {
     const tierRadius: Record<"core" | "sub" | "detail", number> = {
@@ -1469,10 +2017,91 @@ function ArchitectureProjectionSpace({
           />
         </mesh>
       ))}
+      {s5Projection && (
+        <group position={[0, yCenter + s5Projection.baseYOffset, 0.03]} rotation={[Math.PI, 0, 0]}>
+          <mesh rotation={[Math.PI * 0.5, 0, 0]} position={[0, -s5Projection.baseYOffset, -0.028]} renderOrder={329}>
+            <shapeGeometry args={[s5Projection.body]} />
+            <meshBasicMaterial
+              color={new THREE.Color(0.06, 0.07, 0.1)}
+              transparent
+              opacity={0.24}
+              side={THREE.DoubleSide}
+              depthWrite={false}
+              depthTest={false}
+            />
+          </mesh>
+          <mesh renderOrder={330}>
+            <shapeGeometry args={[s5Projection.body]} />
+            <meshBasicMaterial
+              color={new THREE.Color(0.9, 0.92, 0.98)}
+              transparent
+              opacity={0.4}
+              side={THREE.DoubleSide}
+              depthWrite={false}
+              depthTest={false}
+            />
+          </mesh>
+          <mesh position={[0, 0, 0.004]} renderOrder={331}>
+            <shapeGeometry args={[s5Projection.cabin]} />
+            <meshBasicMaterial
+              color={new THREE.Color(0.8, 0.9, 1)}
+              transparent
+              opacity={0.56}
+              side={THREE.DoubleSide}
+              depthWrite={false}
+              depthTest={false}
+            />
+          </mesh>
+          {s5Projection.petals.map((petal, index) => (
+            <mesh
+              key={`s5-petal-${index}`}
+              position={[petal.cx, petal.cy, 0.006 + index * 0.0015]}
+              scale={[1, petal.ry / Math.max(0.001, petal.rx), 1]}
+              renderOrder={332}
+            >
+              <ringGeometry args={[Math.max(0.002, petal.rx * 0.52), petal.rx, 40]} />
+                <meshBasicMaterial
+                  color={new THREE.Color(0.95, 0.97, 1)}
+                  transparent
+                  opacity={0.62}
+                  side={THREE.DoubleSide}
+                  depthWrite={false}
+                  depthTest={false}
+              />
+            </mesh>
+          ))}
+          {s5Projection.wheels.map((wheel, index) => (
+            <group key={`s5-wheel-${index}`} position={[wheel.cx, wheel.cy, 0.005]} renderOrder={333}>
+              <mesh>
+                <ringGeometry args={[wheel.r * 0.58, wheel.r, 36]} />
+                <meshBasicMaterial
+                  color={new THREE.Color(0.14, 0.16, 0.2)}
+                  transparent
+                  opacity={0.72}
+                  side={THREE.DoubleSide}
+                  depthWrite={false}
+                  depthTest={false}
+                />
+              </mesh>
+              <mesh position={[0, 0, 0.001]}>
+                <ringGeometry args={[wheel.r * 0.18, wheel.r * 0.35, 24]} />
+                <meshBasicMaterial
+                  color={new THREE.Color(0.58, 0.62, 0.72)}
+                  transparent
+                  opacity={0.64}
+                  side={THREE.DoubleSide}
+                  depthWrite={false}
+                  depthTest={false}
+                />
+              </mesh>
+            </group>
+          ))}
+        </group>
+      )}
       {renderOptions.showAnchorOverlay &&
         Array.from({ length: miniObjectCount }, (_, index) => {
           const from = rigAnchorPositions[index]
-          const to = projectorPositions[index]
+          const to = ancTargetPositions[index]
           if (!from || !to) return null
           const direction = to.clone().sub(from)
           const length = Math.max(0.001, direction.length())
@@ -1482,21 +2111,22 @@ function ArchitectureProjectionSpace({
           const dimmed = hoverFilterActive && !isHovered
           const radius = isHovered ? 0.025 : 0.016
           return (
-            <group key={`arch-anchor-link-${index}`}>
+            <group key={`arch-anchor-link-${index}`} renderOrder={360}>
               <mesh
                 position={midpoint}
                 quaternion={new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize())}
+                renderOrder={360}
               >
                 <cylinderGeometry args={[radius, radius, length, 8]} />
                 <meshBasicMaterial
                   color={new THREE.Color(0.86, 0.89, 0.98)}
                   transparent
-                  opacity={dimmed ? 0.1 : isHovered ? 0.86 : 0.42}
+                  opacity={dimmed ? 0.14 : isHovered ? 0.9 : 0.62}
                   depthWrite={false}
                   depthTest={false}
                 />
               </mesh>
-              <mesh position={from}>
+              <mesh position={from} renderOrder={361}>
                 <sphereGeometry args={[isHovered ? 0.044 : 0.032, 12, 12]} />
                 <meshBasicMaterial
                   color={new THREE.Color(0.9, 0.92, 1)}
@@ -1830,6 +2460,8 @@ function SceneToolbar({
   architectureSummary,
   showBadges,
   setShowBadges,
+  showSolutionBuilder,
+  setShowSolutionBuilder,
 }: {
   isOpen: boolean
   setIsOpen: (open: boolean) => void
@@ -1852,6 +2484,8 @@ function SceneToolbar({
   architectureSummary: ArchitectureSummary
   showBadges: boolean
   setShowBadges: (show: boolean) => void
+  showSolutionBuilder: boolean
+  setShowSolutionBuilder: (show: boolean) => void
 }) {
   const toolbarPortalRef = useRef<HTMLElement | null>(null)
   useEffect(() => {
@@ -1989,6 +2623,14 @@ function SceneToolbar({
               style={toggleButtonStyle(showBadges)}
             >
               <span style={{ fontSize: "9px", fontWeight: 700, letterSpacing: "0.03em" }}>BDG</span>
+            </button>
+            <button
+              type="button"
+              title="Solution Composer"
+              onClick={() => setShowSolutionBuilder(!showSolutionBuilder)}
+              style={toggleButtonStyle(showSolutionBuilder)}
+            >
+              <span style={{ fontSize: "9px", fontWeight: 700, letterSpacing: "0.03em" }}>SOL</span>
             </button>
             <button
               type="button"
@@ -2131,6 +2773,8 @@ type ToolbarHud3DProps = {
   setShowCylinderRig: (show: boolean) => void
   showDomeObject: boolean
   setShowDomeObject: (show: boolean) => void
+  showSolutionBuilder: boolean
+  setShowSolutionBuilder: (show: boolean) => void
 }
 
 function ToolbarHud3D({
@@ -2163,6 +2807,8 @@ function ToolbarHud3D({
   setShowCylinderRig,
   showDomeObject,
   setShowDomeObject,
+  showSolutionBuilder,
+  setShowSolutionBuilder,
 }: ToolbarHud3DProps) {
   const rootRef = useRef<THREE.Group>(null)
   const ndcAnchorRef = useRef(new THREE.Vector3(TOOLBAR_HUD_VIEW_X, TOOLBAR_HUD_VIEW_Y, 0))
@@ -2177,10 +2823,35 @@ function ToolbarHud3D({
       { key: "CF", label: "CF", active: showConflictMeter, onClick: () => setShowConflictMeter(!showConflictMeter) },
       { key: "PL", label: "PL", active: showPlasticity, onClick: () => setShowPlasticity(!showPlasticity) },
       { key: "LOG", label: "LOG", active: showLogStatus, onClick: () => setShowLogStatus(!showLogStatus) },
+      { key: "SOL", label: "SOL", active: showSolutionBuilder, onClick: () => setShowSolutionBuilder(!showSolutionBuilder) },
       { key: "S4", label: "S4", active: projectorLayoutProfile === "stacked_sculpture", onClick: () => setProjectorLayoutProfile("stacked_sculpture") },
-      { key: "S3", label: "S3", active: projectorLayoutProfile === "hand", onClick: () => setProjectorLayoutProfile("hand") },
-      { key: "S2", label: "S2", active: architectureDisplayMode === "solution2", onClick: () => setArchitectureDisplayMode("solution2") },
-      { key: "S1", label: "S1", active: architectureDisplayMode === "solution1", onClick: () => setArchitectureDisplayMode("solution1") },
+      {
+        key: "S5",
+        label: "S5",
+        active: projectorLayoutProfile === "s5_car_bud",
+        onClick: () => {
+          setProjectorLayoutProfile("s5_car_bud")
+          setArchitectureRenderOptions({ ...architectureRenderOptions, showAnchorOverlay: true })
+        },
+      },
+      {
+        key: "S2",
+        label: "S2",
+        active: architectureDisplayMode === "solution2",
+        onClick: () => {
+          setArchitectureDisplayMode("solution2")
+          setArchitectureRenderOptions({ ...architectureRenderOptions, showAnchorOverlay: true })
+        },
+      },
+      {
+        key: "S1",
+        label: "S1",
+        active: architectureDisplayMode === "solution1",
+        onClick: () => {
+          setArchitectureDisplayMode("solution1")
+          setArchitectureRenderOptions({ ...architectureRenderOptions, showAnchorOverlay: true })
+        },
+      },
       {
         key: "ALL",
         label: "ALL",
@@ -2188,6 +2859,7 @@ function ToolbarHud3D({
         onClick: () => {
           setArchitectureDisplayMode("all")
           setProjectorLayoutProfile("circular")
+          setArchitectureRenderOptions({ ...architectureRenderOptions, showAnchorOverlay: true })
         },
       },
       { key: "SIM", label: "SIM", active: architectureSimEnabled, onClick: () => setArchitectureSimEnabled(!architectureSimEnabled) },
@@ -2225,6 +2897,8 @@ function ToolbarHud3D({
       setShowPlasticity,
       showLogStatus,
       setShowLogStatus,
+      showSolutionBuilder,
+      setShowSolutionBuilder,
       showBadges,
       setShowBadges,
       isDockMode,
@@ -2369,6 +3043,7 @@ const MemoToolbarHud3D = memo(
     prev.showConflictMeter === next.showConflictMeter &&
     prev.showPlasticity === next.showPlasticity &&
     prev.showLogStatus === next.showLogStatus &&
+    prev.showSolutionBuilder === next.showSolutionBuilder &&
     prev.isDockMode === next.isDockMode &&
     prev.architectureDisplayMode === next.architectureDisplayMode &&
     prev.projectorLayoutProfile === next.projectorLayoutProfile &&
@@ -2398,6 +3073,7 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   const [showConflictMeter, setShowConflictMeter] = useState(false)
   const [showPlasticityPanel, setShowPlasticityPanel] = useState(false)
   const [showLogStatus, setShowLogStatus] = useState(false)
+  const [showSolutionBuilder, setShowSolutionBuilder] = useState(false)
   // Archive substrate preview targets by default; keep feature available behind a flag.
   const [showSubstrateTargets] = useState(false)
   const [showToolbarBadges, setShowToolbarBadges] = useState(false)
@@ -2413,6 +3089,12 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
     showDiffOverlay: false,
     showAnchorOverlay: true,
   })
+
+  useEffect(() => {
+    const solutionActive = architectureDisplayMode !== "none" || projectorLayoutProfile === "s5_car_bud"
+    if (!solutionActive || architectureRenderOptions.showAnchorOverlay) return
+    setArchitectureRenderOptions((prev) => ({ ...prev, showAnchorOverlay: true }))
+  }, [architectureDisplayMode, projectorLayoutProfile, architectureRenderOptions.showAnchorOverlay])
   const [architectureSummaryUi, setArchitectureSummaryUi] = useState<ArchitectureSummary>({
     bandHigh: 0,
     bandMedium: 0,
@@ -2422,6 +3104,7 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
     policyOverride: false,
     confidence: 0.5,
   })
+  const [solutionBuilder, setSolutionBuilder] = useState<SolutionBuilderState>(DEFAULT_SOLUTION_BUILDER_STATE)
   const [playlistMode, setPlaylistMode] = useState<"fifo" | "lifo">("fifo")
   const [playlistWindowStart, setPlaylistWindowStart] = useState(0)
   const [quadrantSubstrateIndex, setQuadrantSubstrateIndex] = useState<number[]>(
@@ -4364,6 +5047,11 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
   }, [architectureDisplayMode])
   const verticalDirection: 1 | -1 = cameraMode === "top" ? 1 : -1
   const isRimMiddleView = cameraMode === "rim"
+  const projectToConstellationSpace = architectureDisplayMode === "all" && architectureSimEnabled
+  const constellationCenterY = quadrantPlaneY + domeRadius * 0.06
+  const architectureProjectionY = projectToConstellationSpace
+    ? constellationCenterY
+    : ARCH_PROJECTION_CENTER_Y + MINI_OBJECT_LAYER_Y_LIFT
   const pendingLogCount = Math.max(0, logBufferRef.current.length - lastApiSyncedCountRef.current)
   const logFlushColor =
     logFlushState.status === "ok"
@@ -4435,7 +5123,7 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
             renderOptions={architectureRenderOptions}
             summaryRef={architectureSummaryRef}
             onSummaryUi={handleArchitectureSummaryUi}
-            yCenter={ARCH_PROJECTION_CENTER_Y + MINI_OBJECT_LAYER_Y_LIFT}
+            yCenter={architectureProjectionY}
             layerGap={ARCH_PROJECTION_LAYER_GAP}
             tetherRadius={CYLINDER_TETHER_RADIUS}
             miniObjectCount={MINI_OBJECT_COUNT}
@@ -4863,6 +5551,16 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
         />
       )}
 
+      <SolutionBuilderPanel
+        visible={showSolutionBuilder}
+        builder={solutionBuilder}
+        setBuilder={setSolutionBuilder}
+        architectureSummary={architectureSummaryUi}
+        architectureDisplayMode={architectureDisplayMode}
+        domeRadius={domeRadius}
+        verticalDirection={verticalDirection}
+      />
+
       {/* Plasticity Link Panel - Script Runner */}
       {showPlasticityPanel && (
         <PlasticityLinkPanel
@@ -4878,6 +5576,8 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
           }}
         />
       )}
+
+      {/* Top-right logo archived for now; keep component in code for future retrieval. */}
 
       <MemoToolbarHud3D
         isOpen={isToolbarOpen}
@@ -4915,6 +5615,8 @@ export default function DomeScene({ onExit, bristles, colorPalette, tensorServic
         setShowDomeObject={setShowDomeObject}
         showCylinderRig={showCylinderRig}
         setShowCylinderRig={setShowCylinderRig}
+        showSolutionBuilder={showSolutionBuilder}
+        setShowSolutionBuilder={setShowSolutionBuilder}
       />
 
       {/* Visual feedback: Grip mode indicators */}
